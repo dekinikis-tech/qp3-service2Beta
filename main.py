@@ -38,6 +38,7 @@ TEST_URLS = [
 # INT_SOURCES — публичные зарубежные серверы
 # ============================================================
 INT_SOURCES = [
+    RU_SOURCES = []
     # Epodonios — обновляется каждые 5 минут, plain-текст
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/vless.txt",
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/trojan.txt",
