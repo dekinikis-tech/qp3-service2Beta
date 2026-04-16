@@ -561,9 +561,9 @@ def _get_network(url: str) -> str:
 def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> str:
 
     def ping_color(avg):
-        if avg < 300:  return '#06d6a0'
-        if avg < 1000: return '#ffd166'
-        return '#ef476f'
+        if avg < 300:  return '#22c55e'
+        if avg < 1000: return '#f59e0b'
+        return '#ef4444'
 
     def make_rows(results):
         rows = []
@@ -572,24 +572,40 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
             security = _get_security(url)
             network  = _get_network(url)
             host, _  = _extract_host_port(url)
-            tag      = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else (host or '')[:40]
+            tag      = urllib.parse.unquote(url.split('#')[-1])[:36] if '#' in url else (host or '')[:36]
             is_ru    = _is_russian_server(host or '')
             flag     = '\U0001f1f7\U0001f1fa' if is_ru else '\U0001f30d'
             loss_pct = int(losses / PING_ROUNDS * 100)
             pc       = ping_color(avg)
             safe_url = url.replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;').replace("'", '&#39;')
             safe_tag = tag.replace('<', '&lt;').replace('>', '&gt;')
+
+            proto_colors = {
+                'VLESS':     ('rgba(99,102,241,0.15)', '#a5b4fc', 'rgba(99,102,241,0.35)'),
+                'TROJAN':    ('rgba(234,179,8,0.12)',  '#fde047', 'rgba(234,179,8,0.35)'),
+                'SS':        ('rgba(34,197,94,0.12)',  '#86efac', 'rgba(34,197,94,0.3)'),
+                'HYSTERIA2': ('rgba(236,72,153,0.12)', '#f9a8d4', 'rgba(236,72,153,0.3)'),
+            }
+            pbg, ptxt, pborder = proto_colors.get(proto, ('rgba(148,163,184,0.1)', '#94a3b8', 'rgba(148,163,184,0.25)'))
+
+            sec_colors = {
+                'reality': ('rgba(168,85,247,0.12)', '#c084fc', 'rgba(168,85,247,0.3)'),
+                'tls':     ('rgba(34,197,94,0.1)',   '#86efac', 'rgba(34,197,94,0.25)'),
+                'none':    ('rgba(148,163,184,0.08)','#64748b',  'rgba(148,163,184,0.2)'),
+            }
+            sbg, stxt, sborder = sec_colors.get(security, ('rgba(148,163,184,0.08)', '#64748b', 'rgba(148,163,184,0.2)'))
+
             rows.append(
-                f'<tr style="border-bottom:1px solid #1e2230">'
-                f'<td style="padding:9px 10px;color:#4a5568;width:36px">{i}</td>'
-                f'<td style="padding:9px 10px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{flag} {safe_tag}</td>'
-                f'<td style="padding:9px 10px"><span style="background:#0d2b33;color:#00e5ff;border:1px solid #005f6b;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700">{proto}</span></td>'
-                f'<td style="padding:9px 10px"><span style="background:#1a1f2e;color:#9aa0b4;border:1px solid #2a3040;border-radius:4px;padding:2px 7px;font-size:11px">{network}</span></td>'
-                f'<td style="padding:9px 10px"><span style="background:#1a1f2e;color:#9aa0b4;border:1px solid #2a3040;border-radius:4px;padding:2px 7px;font-size:11px">{security}</span></td>'
-                f'<td style="padding:9px 10px;color:{pc};font-weight:700">{avg}ms</td>'
-                f'<td style="padding:9px 10px;color:#718096">{jitter}ms</td>'
-                f'<td style="padding:9px 10px;color:{"#06d6a0" if loss_pct==0 else "#ef476f"}">{loss_pct}%</td>'
-                f'<td style="padding:9px 10px"><button onclick="copyVpn(this)" data-url="{safe_url}" style="background:#0d2b33;border:1px solid #005f6b;color:#00e5ff;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:13px">Copy</button></td>'
+                f'<tr class="srv-row" data-ping="{avg}" data-proto="{proto}" data-loss="{loss_pct}">' +
+                f'<td class="td-num">{i}</td>' +
+                f'<td class="td-name"><span class="srv-flag">{flag}</span><span class="srv-tag" title="{safe_tag}">{safe_tag}</span></td>' +
+                f'<td class="td-badge"><span class="badge" style="background:{pbg};color:{ptxt};border-color:{pborder}">{proto}</span></td>' +
+                f'<td class="td-badge td-hide"><span class="badge badge-sm" style="background:rgba(148,163,184,0.08);color:#94a3b8;border-color:rgba(148,163,184,0.2)">{network}</span></td>' +
+                f'<td class="td-badge td-hide"><span class="badge badge-sm" style="background:{sbg};color:{stxt};border-color:{sborder}">{security}</span></td>' +
+                f'<td class="td-ping"><span class="ping-val" style="color:{pc}">{avg}</span><span class="ping-unit">ms</span></td>' +
+                f'<td class="td-jitter td-hide" style="color:#64748b;font-family:monospace;font-size:11px">{jitter}ms</td>' +
+                f'<td class="td-loss"><span class="loss-dot" style="background:{"#22c55e" if loss_pct==0 else "#ef4444"}"></span><span style="color:{"#22c55e" if loss_pct==0 else "#ef4444"};font-size:12px">{loss_pct}%</span></td>' +
+                f'<td class="td-copy"><button class="copy-btn" onclick="copyVpn(this)" data-url="{safe_url}" title="Copy config"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button></td>' +
                 f'</tr>'
             )
         return '\n'.join(rows)
@@ -597,7 +613,7 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
     intl_rows = make_rows(intl_results)
     ru_rows   = make_rows(ru_results)
     total     = len(intl_results) + len(ru_results)
-    updated   = time.strftime('%d.%m.%Y %H:%M UTC', time.gmtime())
+    updated   = time.strftime('%d %b %Y · %H:%M UTC', time.gmtime())
     best_ping = min((r[2] for r in intl_results), default=0)
 
     return f"""<!DOCTYPE html>
@@ -606,91 +622,170 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VPN Scout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-body {{ margin:0; padding:0; background:#0a0c10; color:#e2e8f0; font-family:Arial,sans-serif; font-size:13px; }}
-h1 {{ margin:0; padding:20px 20px 0; font-size:24px; color:#fff; }}
-.info {{ padding:8px 20px 16px; color:#718096; font-size:12px; }}
-.info b {{ color:#00e5ff; }}
-.stats-row {{ display:table; width:100%; border-collapse:separate; border-spacing:10px; padding:0 10px 10px; box-sizing:border-box; }}
-.stat {{ display:table-cell; background:#111318; border:1px solid #1e2230; border-radius:8px; padding:14px 18px; text-align:center; }}
-.stat-num {{ font-size:26px; font-weight:700; color:#fff; }}
-.stat-lbl {{ font-size:11px; color:#718096; margin-top:4px; }}
-.tab-bar {{ padding:10px 20px; }}
-.tab-btn {{
-  display:inline-block; padding:10px 30px; margin-right:8px; border-radius:8px;
-  border:2px solid #1e2230; background:#111318; color:#e2e8f0; font-size:14px;
-  font-weight:700; cursor:pointer; text-decoration:none;
+*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+:root{{
+  --bg0:#070b14;--bg1:#0d1117;--bg2:#111827;--bg3:#1a2233;
+  --border:#1e2d3d;--border2:#253347;
+  --text:#e2e8f0;--text2:#94a3b8;--text3:#475569;
+  --accent:#3b82f6;--accent2:#60a5fa;
+  --green:#22c55e;--yellow:#f59e0b;--red:#ef4444;
+  --radius:8px;--radius-lg:12px;
 }}
-.tab-btn.active-intl {{ background:#00e5ff; color:#000; border-color:#00e5ff; }}
-.tab-btn.active-ru   {{ background:#ff6b35; color:#fff; border-color:#ff6b35; }}
-.tab-btn:hover {{ border-color:#718096; }}
-.section {{ display:none; padding:0 20px 40px; }}
-.section.visible {{ display:block; }}
-.tbl-wrap {{ overflow-x:auto; border:1px solid #1e2230; border-radius:8px; }}
-table {{ width:100%; border-collapse:collapse; background:#111318; }}
-thead th {{ background:#0d1017; color:#718096; font-size:10px; text-transform:uppercase; padding:11px 12px; text-align:left; border-bottom:1px solid #1e2230; white-space:nowrap; }}
-tbody tr:hover {{ background:#161b26; }}
-#toast {{ position:fixed; bottom:24px; right:24px; background:#06d6a0; color:#000; font-weight:700; font-size:13px; padding:10px 20px; border-radius:8px; opacity:0; transition:opacity .3s; pointer-events:none; z-index:999; }}
-#toast.show {{ opacity:1; }}
+body{{background:var(--bg0);color:var(--text);font-family:'Inter',sans-serif;font-size:13px;min-height:100vh;line-height:1.5}}
+.header{{background:var(--bg1);border-bottom:1px solid var(--border);padding:0 24px;display:flex;align-items:center;justify-content:space-between;height:56px;position:sticky;top:0;z-index:100}}
+.logo{{display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px}}
+.logo-icon{{width:28px;height:28px;background:linear-gradient(135deg,#3b82f6,#8b5cf6);border-radius:7px;display:flex;align-items:center;justify-content:center}}
+.header-meta{{font-size:11px;color:var(--text3);font-family:'JetBrains Mono',monospace}}
+.stats-bar{{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);border-bottom:1px solid var(--border)}}
+.stat{{background:var(--bg1);padding:16px 20px;text-align:center}}
+.stat-val{{font-size:22px;font-weight:600;font-family:'JetBrains Mono',monospace;line-height:1}}
+.stat-lbl{{font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-top:5px}}
+.content{{padding:20px 20px 40px;max-width:1200px;margin:0 auto}}
+.tabs{{display:flex;gap:6px;margin-bottom:16px;align-items:center}}
+.tab-btn{{padding:7px 18px;border-radius:var(--radius);border:1px solid var(--border2);background:transparent;color:var(--text2);font-size:13px;font-weight:500;cursor:pointer;font-family:'Inter',sans-serif;transition:all .15s}}
+.tab-btn:hover{{background:var(--bg3);color:var(--text)}}
+.tab-btn.active{{background:var(--bg3);border-color:var(--accent);color:var(--accent2)}}
+.tab-btn.active-ru{{border-color:#f97316;color:#fb923c;background:var(--bg3)}}
+.filter-group{{margin-left:auto;display:flex;gap:6px}}
+.filter-select{{background:var(--bg2);border:1px solid var(--border2);color:var(--text2);border-radius:var(--radius);padding:6px 10px;font-size:12px;font-family:'Inter',sans-serif;cursor:pointer;outline:none}}
+.table-card{{background:var(--bg1);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden}}
+.tbl-wrap{{overflow-x:auto}}
+table{{width:100%;border-collapse:collapse}}
+thead th{{background:var(--bg0);color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:.07em;padding:10px 14px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap;font-weight:500}}
+.srv-row{{border-bottom:1px solid var(--border);transition:background .1s}}
+.srv-row:last-child{{border-bottom:none}}
+.srv-row:hover{{background:var(--bg2)}}
+.td-num{{padding:10px 14px;color:var(--text3);font-size:11px;width:36px;font-family:monospace}}
+.td-name{{padding:10px 14px;max-width:200px}}
+.srv-flag{{font-size:13px;margin-right:6px}}
+.srv-tag{{font-size:12px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;max-width:180px;vertical-align:bottom}}
+.td-badge{{padding:10px 14px}}
+.badge{{display:inline-flex;align-items:center;padding:2px 8px;border-radius:5px;font-size:10px;font-weight:600;letter-spacing:.04em;border:1px solid;font-family:monospace}}
+.badge-sm{{font-weight:400}}
+.td-ping{{padding:10px 14px;white-space:nowrap}}
+.ping-val{{font-size:14px;font-weight:600;font-family:monospace}}
+.ping-unit{{font-size:10px;color:var(--text3);margin-left:1px}}
+.td-jitter{{padding:10px 14px}}
+.td-loss{{padding:10px 14px;display:flex;align-items:center;gap:5px}}
+.loss-dot{{width:6px;height:6px;border-radius:50%;flex-shrink:0}}
+.td-copy{{padding:10px 14px}}
+.copy-btn{{background:var(--bg3);border:1px solid var(--border2);color:var(--text2);border-radius:6px;padding:5px 8px;cursor:pointer;display:flex;align-items:center;transition:all .15s}}
+.copy-btn:hover{{background:rgba(59,130,246,0.15);border-color:var(--accent);color:var(--accent2)}}
+.copy-btn.ok{{background:rgba(34,197,94,0.15);border-color:#22c55e;color:#22c55e}}
+.empty{{padding:40px;text-align:center;color:var(--text3)}}
+.sub-banner{{background:rgba(59,130,246,0.07);border:1px solid rgba(59,130,246,0.18);border-radius:var(--radius);padding:11px 16px;margin-bottom:16px;font-size:12px;color:var(--text2);display:flex;align-items:center;gap:8px;flex-wrap:wrap}}
+.sub-banner code{{font-family:'JetBrains Mono',monospace;color:var(--accent2);font-size:11px;background:rgba(59,130,246,0.1);padding:2px 6px;border-radius:4px}}
+#toast{{position:fixed;bottom:20px;right:20px;background:#22c55e;color:#052e16;font-weight:600;font-size:12px;padding:9px 16px;border-radius:var(--radius);opacity:0;transform:translateY(6px);transition:all .2s;pointer-events:none;z-index:999}}
+#toast.show{{opacity:1;transform:translateY(0)}}
+@media(max-width:680px){{.td-hide{{display:none}}.stats-bar{{grid-template-columns:repeat(2,1fr)}}.content{{padding:12px}}.filter-group{{display:none}}}}
 </style>
 </head>
 <body>
-<h1>VPN Scout</h1>
-<div class="info">Обновлено: <b>{updated}</b> &nbsp;|&nbsp; Время проверки: <b>{elapsed}с</b> &nbsp;|&nbsp; Google-бан фильтр: <b>✅</b></div>
-<div class="stats-row">
-  <div class="stat"><div class="stat-num" style="color:#00e5ff">{len(intl_results)}</div><div class="stat-lbl">🌍 Зарубежных</div></div>
-  <div class="stat"><div class="stat-num" style="color:#ff6b35">{len(ru_results)}</div><div class="stat-lbl">🇷🇺 Российских</div></div>
-  <div class="stat"><div class="stat-num">{total}</div><div class="stat-lbl">Всего живых</div></div>
-  <div class="stat"><div class="stat-num" style="color:#06d6a0">{best_ping}ms</div><div class="stat-lbl">Лучший пинг</div></div>
+<header class="header">
+  <div class="logo">
+    <div class="logo-icon">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+    </div>
+    VPN Scout
+  </div>
+  <div class="header-meta">Updated {updated} &nbsp;·&nbsp; Scan: {elapsed}s</div>
+</header>
+<div class="stats-bar">
+  <div class="stat"><div class="stat-val" style="color:var(--accent2)">{len(intl_results)}</div><div class="stat-lbl">International</div></div>
+  <div class="stat"><div class="stat-val" style="color:#fb923c">{len(ru_results)}</div><div class="stat-lbl">Russian</div></div>
+  <div class="stat"><div class="stat-val">{total}</div><div class="stat-lbl">Total alive</div></div>
+  <div class="stat"><div class="stat-val" style="color:var(--green)">{best_ping}ms</div><div class="stat-lbl">Best ping</div></div>
 </div>
-<div class="tab-bar">
-  <button class="tab-btn active-intl" id="btn-intl" onclick="showTab('intl')">🌍 Зарубежные ({len(intl_results)})</button>
-  <button class="tab-btn" id="btn-ru" onclick="showTab('ru')">🇷🇺 Российские ({len(ru_results)})</button>
+<div class="content">
+<div class="sub-banner">
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
+  Подписка: <code>https://gist.githubusercontent.com/YOUR_USER/YOUR_GIST_ID/raw/sub.txt</code>
+  &nbsp;·&nbsp; Нажми Copy для прямого копирования конфига.
 </div>
-<div class="section visible" id="sec-intl">
+<div class="tabs">
+  <button class="tab-btn active" id="btn-intl" onclick="showTab('intl')">
+    🌍 International <span style="background:rgba(59,130,246,0.15);color:var(--accent2);border-radius:20px;padding:1px 7px;font-size:11px;margin-left:4px">{len(intl_results)}</span>
+  </button>
+  <button class="tab-btn" id="btn-ru" onclick="showTab('ru')">
+    🇷🇺 Russian <span style="background:rgba(249,115,22,0.12);color:#fb923c;border-radius:20px;padding:1px 7px;font-size:11px;margin-left:4px">{len(ru_results)}</span>
+  </button>
+  <div class="filter-group">
+    <select class="filter-select" id="proto-filter" onchange="applyFilters()">
+      <option value="">All protocols</option>
+      <option value="VLESS">VLESS</option>
+      <option value="TROJAN">TROJAN</option>
+      <option value="SS">SS</option>
+      <option value="HYSTERIA2">HYSTERIA2</option>
+    </select>
+    <select class="filter-select" id="sort-select" onchange="applyFilters()">
+      <option value="ping">Sort: Ping ↑</option>
+      <option value="loss">Sort: Loss ↑</option>
+    </select>
+  </div>
+</div>
+<div class="table-card" id="sec-intl">
   <div class="tbl-wrap"><table>
-    <thead><tr><th>#</th><th>Сервер</th><th>Протокол</th><th>Транспорт</th><th>Безопасность</th><th>Пинг</th><th>Jitter</th><th>Loss</th><th></th></tr></thead>
-    <tbody>{intl_rows if intl_rows else '<tr><td colspan="9" style="text-align:center;padding:30px;color:#718096">Нет серверов</td></tr>'}</tbody>
+    <thead><tr><th>#</th><th>Server</th><th>Protocol</th><th class="td-hide">Network</th><th class="td-hide">Security</th><th>Ping</th><th class="td-hide">Jitter</th><th>Loss</th><th></th></tr></thead>
+    <tbody id="body-intl">{intl_rows if intl_rows else '<tr><td colspan="9"><div class="empty">No servers</div></td></tr>'}</tbody>
   </table></div>
 </div>
-<div class="section" id="sec-ru">
+<div class="table-card" id="sec-ru" style="display:none">
   <div class="tbl-wrap"><table>
-    <thead><tr><th>#</th><th>Сервер</th><th>Протокол</th><th>Транспорт</th><th>Безопасность</th><th>Пинг</th><th>Jitter</th><th>Loss</th><th></th></tr></thead>
-    <tbody>{ru_rows if ru_rows else '<tr><td colspan="9" style="text-align:center;padding:30px;color:#718096">Нет серверов</td></tr>'}</tbody>
+    <thead><tr><th>#</th><th>Server</th><th>Protocol</th><th class="td-hide">Network</th><th class="td-hide">Security</th><th>Ping</th><th class="td-hide">Jitter</th><th>Loss</th><th></th></tr></thead>
+    <tbody id="body-ru">{ru_rows if ru_rows else '<tr><td colspan="9"><div class="empty">No servers</div></td></tr>'}</tbody>
   </table></div>
 </div>
-<div id="toast">Скопировано!</div>
+</div>
+<div id="toast">Copied!</div>
 <script>
-function showTab(name) {{
-  document.getElementById('sec-intl').className = 'section' + (name === 'intl' ? ' visible' : '');
-  document.getElementById('sec-ru').className   = 'section' + (name === 'ru'   ? ' visible' : '');
-  document.getElementById('btn-intl').className = 'tab-btn' + (name === 'intl' ? ' active-intl' : '');
-  document.getElementById('btn-ru').className   = 'tab-btn' + (name === 'ru'   ? ' active-ru'   : '');
+var activeTab='intl';
+function showTab(name){{
+  activeTab=name;
+  document.getElementById('sec-intl').style.display=name==='intl'?'':'none';
+  document.getElementById('sec-ru').style.display=name==='ru'?'':'none';
+  document.getElementById('btn-intl').className='tab-btn'+(name==='intl'?' active':'');
+  document.getElementById('btn-ru').className='tab-btn'+(name==='ru'?' active-ru':'');
+  applyFilters();
 }}
-function copyVpn(btn) {{
-  var url = btn.getAttribute('data-url');
-  var ta = document.createElement('textarea');
-  ta.value = url; ta.style.position = 'fixed'; ta.style.left = '-9999px';
-  document.body.appendChild(ta); ta.select();
-  try {{
+function applyFilters(){{
+  var proto=document.getElementById('proto-filter').value;
+  var sort=document.getElementById('sort-select').value;
+  var bodyId=activeTab==='intl'?'body-intl':'body-ru';
+  var body=document.getElementById(bodyId);
+  var rows=Array.from(body.querySelectorAll('.srv-row'));
+  rows.forEach(function(r){{r.style.display=(!proto||r.getAttribute('data-proto')===proto)?'':'none';}});
+  var vis=rows.filter(function(r){{return r.style.display!=='none';}});
+  vis.sort(function(a,b){{
+    var k=sort==='loss'?'data-loss':'data-ping';
+    return parseInt(a.getAttribute(k))-parseInt(b.getAttribute(k));
+  }});
+  vis.forEach(function(r,i){{body.appendChild(r);r.querySelector('.td-num').textContent=i+1;}});
+}}
+function copyVpn(btn){{
+  var url=btn.getAttribute('data-url');
+  var ta=document.createElement('textarea');
+  ta.value=url;ta.style.cssText='position:fixed;left:-9999px;opacity:0';
+  document.body.appendChild(ta);ta.select();
+  try{{
     document.execCommand('copy');
-    btn.textContent = 'OK!'; btn.style.color = '#06d6a0'; btn.style.borderColor = '#06d6a0';
-    var t = document.getElementById('toast'); t.className = 'show';
-    setTimeout(function() {{
-      btn.textContent = 'Copy'; btn.style.color = '#00e5ff'; btn.style.borderColor = '#005f6b';
-      t.className = '';
-    }}, 1500);
-  }} catch(e) {{ alert('Не удалось скопировать'); }}
+    btn.classList.add('ok');
+    btn.innerHTML='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
+    var t=document.getElementById('toast');t.className='show';
+    setTimeout(function(){{
+      btn.classList.remove('ok');
+      btn.innerHTML='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+      t.className='';
+    }},1600);
+  }}catch(e){{alert('Copy failed');}}
   document.body.removeChild(ta);
 }}
 </script>
 </body>
 </html>"""
 
-
-# ============================================================
-# ГЛАВНЫЙ ЗАПУСК
-# ============================================================
 
 def run():
     t_start = time.time()
