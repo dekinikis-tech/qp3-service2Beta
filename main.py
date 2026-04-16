@@ -12,31 +12,37 @@ XRAY_BIN    = "xray"
 TOP_N_EACH  = 300
 
 # Этап 1 — быстрый TCP-пинг
-TCP_WORKERS = 100
-TCP_TIMEOUT = 1.5
+TCP_WORKERS = 200          # увеличено: быстрее проверяем 10к серверов
+TCP_TIMEOUT = 2.0          # чуть больше — меньше ложных отказов
 
 # Этап 2 — глубокая проверка через xray
 _slow = os.environ.get('MY_SLOW_NET') == '1'
-XRAY_WORKERS       = 20
-MAX_XRAY_TOTAL     = 3000   # останавливаемся после N проверенных если топ уже набран
+XRAY_WORKERS       = 40    # увеличено с 20: быстрее xray-проверка
+MAX_XRAY_TOTAL     = 10000 # снята искусственная планка — проверяем всех выживших
 PING_ROUNDS        = 3
-MAX_PING_MS        = 6000 if _slow else 4000
-MAX_LOSS_RATE      = 0.67 if _slow else 0.5
-REQUEST_TIMEOUT    = 12.0 if _slow else 7.0
-XRAY_START_TIMEOUT = 5.0  if _slow else 3.5
+MAX_PING_MS        = 6000 if _slow else 5000  # чуть мягче — меньше ложных отказов
+MAX_LOSS_RATE      = 0.67 if _slow else 0.67  # тоже мягче
+REQUEST_TIMEOUT    = 15.0 if _slow else 10.0
+XRAY_START_TIMEOUT = 6.0  if _slow else 4.5
+
+# ============================================================
+# ПРИОРИТЕТ REALITY
+# Reality-серверы самые стабильные — они идут первыми на xray-проверку
+# ============================================================
+REALITY_BONUS_SCORE = -500  # вычитаем из score чтобы поднять выше в топе
 
 TEST_URLS = [
-    "http://www.instagram.com/",
-    "http://www.facebook.com/",
     "http://www.gstatic.com/generate_204",
     "http://cp.cloudflare.com/",
+    "http://connectivitycheck.gstatic.com/generate_204",
+    "http://www.msftncsi.com/ncsi.txt",
 ]
 
 # ============================================================
 # ИСТОЧНИКИ
 # ============================================================
 RU_SOURCES = [
-    # Добавь сюда RU-источники если появятся
+    # Добавь RU-источники здесь если появятся
 ]
 
 INT_SOURCES = [
@@ -61,15 +67,25 @@ INT_SOURCES = [
 
 SOURCES = RU_SOURCES + INT_SOURCES
 
+# ============================================================
+# ФИЛЬТРЫ — ИСПРАВЛЕНО
+# Убран 'oneclick' — он уничтожал большинство серверов.
+# Оставлены только реально вредные: российские сервисы и мусорные
+# источники которые дают нерабочие конфиги.
+# ============================================================
 BLACK_LIST = [
-    'meshky', '4mohsen', 'white', '708087',
-    'oneclick', '4jadi', '4kian', 'yandex.net', 'vk-apps.com',
+    'meshky', '4mohsen', '708087',
+    '4jadi', '4kian',
+    'yandex.net', 'vk-apps.com', 'vk.com', 'mail.ru',
 ]
 
+# BLOCKED_IPS: только Cloudflare WARP и Яндекс облако.
+# Убраны широкие Cloudflare CDN диапазоны — они могут быть рабочими прокси.
 BLOCKED_IPS = (
-    '104.', '172.64.', '172.65.', '172.66.', '172.67.',
-    '188.114.', '162.159.', '108.162.', '158.160.',
-    '51.250.', '84.201.',
+    '158.160.',   # Яндекс облако
+    '51.250.',    # Яндекс облако
+    '84.201.',    # Яндекс облако
+    '130.193.',   # Яндекс облако
 )
 
 RU_IP_PREFIXES = (
@@ -112,10 +128,6 @@ RU_IP_PREFIXES = (
     '213.195.', '213.202.', '213.203.', '213.206.', '213.207.', '213.208.', '213.219.',
     '213.220.', '213.222.', '213.226.', '213.227.', '213.228.', '213.230.', '213.232.',
     '213.234.', '213.243.', '213.248.', '216.24.',
-    '158.160.',
-    '51.250.',
-    '84.201.',
-    '130.193.',
     '62.84.',
     '94.250.',
 )
@@ -151,6 +163,11 @@ def _is_russian_server(address: str) -> bool:
         if address.startswith(RU_IP_PREFIXES):
             return True
     return False
+
+
+def _is_reality(url: str) -> bool:
+    """Определяет, использует ли сервер протокол Reality."""
+    return 'security=reality' in url
 
 
 # ============================================================
@@ -223,7 +240,7 @@ def _build_xray_config(data: dict, port: int) -> dict:
 
     if net == "ws":
         stream["wsSettings"] = {
-            "path": q("path", "/"),
+            "path": urllib.parse.unquote(q("path", "/")),
             "headers": {"Host": q('host', address)},
         }
     elif net == "grpc":
@@ -231,7 +248,17 @@ def _build_xray_config(data: dict, port: int) -> dict:
     elif net == "h2":
         stream["httpSettings"] = {
             "host": [q('host', address)],
-            "path": q("path", "/"),
+            "path": urllib.parse.unquote(q("path", "/")),
+        }
+    elif net == "splithttp":
+        stream["splithttpSettings"] = {
+            "path": urllib.parse.unquote(q("path", "/")),
+            "host": q('host', address),
+        }
+    elif net == "xhttp":
+        stream["xhttpSettings"] = {
+            "path": urllib.parse.unquote(q("path", "/")),
+            "host": q('host', address),
         }
 
     if sec == "reality":
@@ -244,10 +271,13 @@ def _build_xray_config(data: dict, port: int) -> dict:
         }
     elif sec == "tls":
         stream["tlsSettings"] = {
-            "serverName":  sni,
-            "fingerprint": q("fp", "chrome"),
-            "alpn":        ["h2", "http/1.1"],
+            "serverName":      sni,
+            "fingerprint":     q("fp", "chrome"),
+            "allowInsecure":   q("allowInsecure", "0") == "1",
+            "alpn":            ["h2", "http/1.1"],
         }
+
+    flow = q("flow", "")
 
     return {
         "log": {"loglevel": "none"},
@@ -260,7 +290,7 @@ def _build_xray_config(data: dict, port: int) -> dict:
                     "vnext": [{
                         "address": address,
                         "port":    server_port,
-                        "users":   [{"id": data['uuid'], "encryption": "none", "flow": q("flow")}],
+                        "users":   [{"id": data['uuid'], "encryption": "none", "flow": flow}],
                     }]
                 },
                 "streamSettings": stream,
@@ -312,10 +342,10 @@ def _build_xray_config_trojan(url: str, port: int) -> dict | None:
         }
     elif sec == "tls":
         stream["tlsSettings"] = {
-            "serverName":  sni,
-            "fingerprint": q("fp", "chrome"),
+            "serverName":    sni,
+            "fingerprint":   q("fp", "chrome"),
             "allowInsecure": q("allowInsecure", "0") == "1",
-            "alpn":        ["h2", "http/1.1"],
+            "alpn":          ["h2", "http/1.1"],
         }
 
     return {
@@ -339,25 +369,12 @@ def _build_xray_config_trojan(url: str, port: int) -> dict | None:
     }
 
 
-def _check_google_ban(session: requests.Session) -> bool:
-    try:
-        r = session.get(
-            "http://www.google.com/generate_204",
-            timeout=5.0,
-            allow_redirects=False,
-        )
-        if r.status_code == 204:
-            return True
-        if r.status_code in (301, 302):
-            location = r.headers.get('Location', '')
-            if 'sorry' in location or 'captcha' in location:
-                return False
-        return True
-    except Exception:
-        return True
-
-
 def test_via_xray(url: str):
+    """
+    Реальная проверка через xray для VLESS и Trojan.
+    Hysteria2 и SS пропускаются — xray их не поддерживает как outbound в данной схеме,
+    поэтому они вообще не добавляются в финальный список (только реально проверенные).
+    """
     port     = port_queue.get()
     cfg_file = f"cfg_{port}.json"
     proc     = None
@@ -372,8 +389,9 @@ def test_via_xray(url: str):
             if config is None:
                 return None
         else:
-            # hysteria2 и ss — TCP прошли, даём условный пинг
-            return (url, 9999, 9999, 0, 0)
+            # hysteria2 и ss — xray не тестирует их через HTTP-прокси
+            # НЕ даём фиктивный результат — пропускаем, чтобы не засорять топ
+            return None
 
         with open(cfg_file, "w") as f:
             json.dump(config, f)
@@ -395,9 +413,6 @@ def test_via_xray(url: str):
         session.trust_env = False
         session.proxies   = proxies
 
-        if not _check_google_ban(session):
-            return None
-
         pings  = []
         losses = 0
 
@@ -408,6 +423,7 @@ def test_via_xray(url: str):
                     t0      = time.perf_counter()
                     r       = session.get(test_url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
                     elapsed = int((time.perf_counter() - t0) * 1000)
+                    # Принимаем: 200, 204 (connectivity check), 301/302 (редирект — соединение есть)
                     if r.status_code in (200, 204, 301, 302):
                         pings.append(elapsed)
                         success = True
@@ -427,7 +443,12 @@ def test_via_xray(url: str):
             return None
 
         jitter = int(statistics.stdev(pings)) if len(pings) > 1 else 0
-        score  = avg_ping + jitter // 2
+
+        # Reality-бонус: опускаем score вниз чтобы они оказались выше в топе
+        is_reality = _is_reality(url)
+        score = avg_ping + jitter // 2
+        if is_reality:
+            score = max(0, score + REALITY_BONUS_SCORE)
 
         return (url, score, avg_ping, jitter, losses)
 
@@ -437,7 +458,7 @@ def test_via_xray(url: str):
         if proc:
             try:
                 proc.terminate()
-                proc.wait(timeout=1.5)
+                proc.wait(timeout=2.0)
             except Exception:
                 try: proc.kill()
                 except Exception: pass
@@ -580,6 +601,9 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
             safe_url = url.replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;').replace("'", '&#39;')
             safe_tag = tag.replace('<', '&lt;').replace('>', '&gt;')
 
+            # Reality-метка
+            reality_mark = ' ⚡' if security == 'reality' else ''
+
             proto_colors = {
                 'VLESS':     ('rgba(99,102,241,0.15)', '#a5b4fc', 'rgba(99,102,241,0.35)'),
                 'TROJAN':    ('rgba(234,179,8,0.12)',  '#fde047', 'rgba(234,179,8,0.35)'),
@@ -589,16 +613,16 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
             pbg, ptxt, pborder = proto_colors.get(proto, ('rgba(148,163,184,0.1)', '#94a3b8', 'rgba(148,163,184,0.25)'))
 
             sec_colors = {
-                'reality': ('rgba(168,85,247,0.12)', '#c084fc', 'rgba(168,85,247,0.3)'),
+                'reality': ('rgba(168,85,247,0.18)', '#c084fc', 'rgba(168,85,247,0.5)'),
                 'tls':     ('rgba(34,197,94,0.1)',   '#86efac', 'rgba(34,197,94,0.25)'),
                 'none':    ('rgba(148,163,184,0.08)','#64748b',  'rgba(148,163,184,0.2)'),
             }
             sbg, stxt, sborder = sec_colors.get(security, ('rgba(148,163,184,0.08)', '#64748b', 'rgba(148,163,184,0.2)'))
 
             rows.append(
-                f'<tr class="srv-row" data-ping="{avg}" data-proto="{proto}" data-loss="{loss_pct}">' +
+                f'<tr class="srv-row" data-ping="{avg}" data-proto="{proto}" data-loss="{loss_pct}" data-sec="{security}">' +
                 f'<td class="td-num">{i}</td>' +
-                f'<td class="td-name"><span class="srv-flag">{flag}</span><span class="srv-tag" title="{safe_tag}">{safe_tag}</span></td>' +
+                f'<td class="td-name"><span class="srv-flag">{flag}</span><span class="srv-tag" title="{safe_tag}">{safe_tag}{reality_mark}</span></td>' +
                 f'<td class="td-badge"><span class="badge" style="background:{pbg};color:{ptxt};border-color:{pborder}">{proto}</span></td>' +
                 f'<td class="td-badge td-hide"><span class="badge badge-sm" style="background:rgba(148,163,184,0.08);color:#94a3b8;border-color:rgba(148,163,184,0.2)">{network}</span></td>' +
                 f'<td class="td-badge td-hide"><span class="badge badge-sm" style="background:{sbg};color:{stxt};border-color:{sborder}">{security}</span></td>' +
@@ -615,6 +639,7 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
     total     = len(intl_results) + len(ru_results)
     updated   = time.strftime('%d %b %Y · %H:%M UTC', time.gmtime())
     best_ping = min((r[2] for r in intl_results), default=0)
+    reality_count = sum(1 for r in (intl_results + ru_results) if _is_reality(r[0]))
 
     return f"""<!DOCTYPE html>
 <html lang="ru">
@@ -632,6 +657,7 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
   --text:#e2e8f0;--text2:#94a3b8;--text3:#475569;
   --accent:#3b82f6;--accent2:#60a5fa;
   --green:#22c55e;--yellow:#f59e0b;--red:#ef4444;
+  --reality:#a855f7;
   --radius:8px;--radius-lg:12px;
 }}
 body{{background:var(--bg0);color:var(--text);font-family:'Inter',sans-serif;font-size:13px;min-height:100vh;line-height:1.5}}
@@ -639,7 +665,7 @@ body{{background:var(--bg0);color:var(--text);font-family:'Inter',sans-serif;fon
 .logo{{display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px}}
 .logo-icon{{width:28px;height:28px;background:linear-gradient(135deg,#3b82f6,#8b5cf6);border-radius:7px;display:flex;align-items:center;justify-content:center}}
 .header-meta{{font-size:11px;color:var(--text3);font-family:'JetBrains Mono',monospace}}
-.stats-bar{{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);border-bottom:1px solid var(--border)}}
+.stats-bar{{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--border);border-bottom:1px solid var(--border)}}
 .stat{{background:var(--bg1);padding:16px 20px;text-align:center}}
 .stat-val{{font-size:22px;font-weight:600;font-family:'JetBrains Mono',monospace;line-height:1}}
 .stat-lbl{{font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-top:5px}}
@@ -658,6 +684,7 @@ thead th{{background:var(--bg0);color:var(--text3);font-size:10px;text-transform
 .srv-row{{border-bottom:1px solid var(--border);transition:background .1s}}
 .srv-row:last-child{{border-bottom:none}}
 .srv-row:hover{{background:var(--bg2)}}
+.srv-row[data-sec="reality"]{{border-left:2px solid rgba(168,85,247,0.4)}}
 .td-num{{padding:10px 14px;color:var(--text3);font-size:11px;width:36px;font-family:monospace}}
 .td-name{{padding:10px 14px;max-width:200px}}
 .srv-flag{{font-size:13px;margin-right:6px}}
@@ -680,7 +707,7 @@ thead th{{background:var(--bg0);color:var(--text3);font-size:10px;text-transform
 .sub-banner code{{font-family:'JetBrains Mono',monospace;color:var(--accent2);font-size:11px;background:rgba(59,130,246,0.1);padding:2px 6px;border-radius:4px}}
 #toast{{position:fixed;bottom:20px;right:20px;background:#22c55e;color:#052e16;font-weight:600;font-size:12px;padding:9px 16px;border-radius:var(--radius);opacity:0;transform:translateY(6px);transition:all .2s;pointer-events:none;z-index:999}}
 #toast.show{{opacity:1;transform:translateY(0)}}
-@media(max-width:680px){{.td-hide{{display:none}}.stats-bar{{grid-template-columns:repeat(2,1fr)}}.content{{padding:12px}}.filter-group{{display:none}}}}
+@media(max-width:680px){{.td-hide{{display:none}}.stats-bar{{grid-template-columns:repeat(3,1fr)}}.content{{padding:12px}}.filter-group{{display:none}}}}
 </style>
 </head>
 <body>
@@ -698,12 +725,13 @@ thead th{{background:var(--bg0);color:var(--text3);font-size:10px;text-transform
   <div class="stat"><div class="stat-val" style="color:#fb923c">{len(ru_results)}</div><div class="stat-lbl">Russian</div></div>
   <div class="stat"><div class="stat-val">{total}</div><div class="stat-lbl">Total alive</div></div>
   <div class="stat"><div class="stat-val" style="color:var(--green)">{best_ping}ms</div><div class="stat-lbl">Best ping</div></div>
+  <div class="stat"><div class="stat-val" style="color:var(--reality)">⚡{reality_count}</div><div class="stat-lbl">Reality</div></div>
 </div>
 <div class="content">
 <div class="sub-banner">
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
   Подписка: <code>https://gist.githubusercontent.com/YOUR_USER/YOUR_GIST_ID/raw/sub.txt</code>
-  &nbsp;·&nbsp; Нажми Copy для прямого копирования конфига.
+  &nbsp;·&nbsp; ⚡ = Reality (приоритет). Нажми Copy для прямого копирования конфига.
 </div>
 <div class="tabs">
   <button class="tab-btn active" id="btn-intl" onclick="showTab('intl')">
@@ -717,8 +745,12 @@ thead th{{background:var(--bg0);color:var(--text3);font-size:10px;text-transform
       <option value="">All protocols</option>
       <option value="VLESS">VLESS</option>
       <option value="TROJAN">TROJAN</option>
-      <option value="SS">SS</option>
-      <option value="HYSTERIA2">HYSTERIA2</option>
+    </select>
+    <select class="filter-select" id="sec-filter" onchange="applyFilters()">
+      <option value="">All security</option>
+      <option value="reality">⚡ Reality</option>
+      <option value="tls">TLS</option>
+      <option value="none">None</option>
     </select>
     <select class="filter-select" id="sort-select" onchange="applyFilters()">
       <option value="ping">Sort: Ping ↑</option>
@@ -752,11 +784,16 @@ function showTab(name){{
 }}
 function applyFilters(){{
   var proto=document.getElementById('proto-filter').value;
+  var sec=document.getElementById('sec-filter').value;
   var sort=document.getElementById('sort-select').value;
   var bodyId=activeTab==='intl'?'body-intl':'body-ru';
   var body=document.getElementById(bodyId);
   var rows=Array.from(body.querySelectorAll('.srv-row'));
-  rows.forEach(function(r){{r.style.display=(!proto||r.getAttribute('data-proto')===proto)?'':'none';}});
+  rows.forEach(function(r){{
+    var protoOk=!proto||r.getAttribute('data-proto')===proto;
+    var secOk=!sec||r.getAttribute('data-sec')===sec;
+    r.style.display=(protoOk&&secOk)?'':'none';
+  }});
   var vis=rows.filter(function(r){{return r.style.display!=='none';}});
   vis.sort(function(a,b){{
     var k=sort==='loss'?'data-loss':'data-ping';
@@ -790,14 +827,14 @@ function copyVpn(btn){{
 def run():
     t_start = time.time()
     print("=" * 60)
-    print("  VPN SCOUT — новый репозиторий (INT + RU источники)")
+    print("  VPN SCOUT — оптимизированная версия")
     print(f"  TCP-воркеры   : {TCP_WORKERS}  (таймаут {TCP_TIMEOUT}с)")
     print(f"  Xray-воркеры  : {XRAY_WORKERS}  (таймаут {XRAY_START_TIMEOUT}с)")
     print(f"  Раундов       : {PING_ROUNDS},  макс. пинг: {MAX_PING_MS}мс")
     print(f"  Топ каждой гео: {TOP_N_EACH}")
     print(f"  Макс. xray-проверок: {MAX_XRAY_TOTAL}")
     print(f"  Динамический таймаут (MY_SLOW_NET): {'ВКЛ' if _slow else 'ВЫКЛ'}")
-    print(f"  Google-бан фильтр: ВКЛ")
+    print(f"  Reality-приоритет: ВКЛ (бонус {REALITY_BONUS_SCORE}мс к score)")
     print(f"  Base64-подписка: {SUB_FILE}")
     print(f"  Источников: {len(RU_SOURCES)} RU + {len(INT_SOURCES)} INT = {len(SOURCES)} всего")
     print("=" * 60)
@@ -827,25 +864,29 @@ def run():
         print("Нет живых серверов после TCP-проверки.")
         return
 
+    # Reality-серверы идут первыми на xray-проверку — они важнее
+    alive_sorted = sorted(alive, key=lambda u: (0 if _is_reality(u) else 1))
+    reality_in_alive = sum(1 for u in alive if _is_reality(u))
+    print(f"      Из них Reality: {reality_in_alive}")
+
     # --- [3/4] Xray ---
-    print(f"\n[3/4] Глубокая xray-проверка (макс. {MAX_XRAY_TOTAL} из {len(alive)}, {XRAY_WORKERS} воркеров)...")
+    to_check = alive_sorted[:MAX_XRAY_TOTAL]
+    print(f"\n[3/4] Глубокая xray-проверка ({len(to_check)} серверов, {XRAY_WORKERS} воркеров)...")
+    print(f"      Reality идут первыми в очереди ({reality_in_alive} шт.)")
     results = []
     tested  = 0
-    total   = min(len(alive), MAX_XRAY_TOTAL)
+    total   = len(to_check)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=XRAY_WORKERS) as ex:
-        futures = {ex.submit(test_via_xray, u): u for u in alive[:MAX_XRAY_TOTAL]}
+        futures = {ex.submit(test_via_xray, u): u for u in to_check}
         for future in concurrent.futures.as_completed(futures):
             tested += 1
-            if tested % 50 == 0 or tested == total:
-                print(f"  Прогресс: {tested}/{total}  |  Прошли xray: {len(results)}")
+            if tested % 100 == 0 or tested == total:
+                reality_ok = sum(1 for r in results if _is_reality(r[0]))
+                print(f"  Прогресс: {tested}/{total}  |  Прошли xray: {len(results)}  |  Reality OK: {reality_ok}")
             res = future.result()
             if res:
                 results.append(res)
-            # Ранний выход: топ уже набран, незачем продолжать
-            if len(results) >= TOP_N_EACH * 2 and tested >= total // 2:
-                print(f"  ✅ Ранний выход: набрано {len(results)} серверов при {tested} проверенных")
-                break
 
     elapsed_total = int(time.time() - t_start)
 
@@ -855,7 +896,7 @@ def run():
         print("❌ Нет рабочих серверов. Старый файл сохранён.")
         return
 
-    results.sort(key=lambda x: x[1])
+    results.sort(key=lambda x: x[1])  # сортировка по score (Reality идут выше)
 
     intl_all = []
     ru_all   = []
@@ -870,23 +911,30 @@ def run():
     intl_results = intl_all[:TOP_N_EACH]
     ru_results   = ru_all[:TOP_N_EACH]
 
+    reality_total = sum(1 for r in (intl_results + ru_results) if _is_reality(r[0]))
+
     print(f"\n{'─'*60}")
     print(f"  Всего: {len(all_configs)} → TCP: {len(alive)} → xray: {len(results)}")
     print(f"  🌍 Зарубежных: найдено {len(intl_all)}, в топе: {len(intl_results)}")
     print(f"  🇷🇺 Российских: найдено {len(ru_all)}, в топе: {len(ru_results)}")
+    print(f"  ⚡ Reality в финале: {reality_total}")
     print(f"  Время: {elapsed_total}с")
     print(f"{'─'*60}")
 
     print("\n  Топ-10 зарубежных:")
     for i, (url, score, avg, jitter, losses) in enumerate(intl_results[:10], 1):
         name = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else url[8:48]
-        print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}  {name}")
+        sec  = _get_security(url)
+        mark = " ⚡Reality" if sec == "reality" else f" [{sec}]"
+        print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}{mark}  {name}")
 
     if ru_results:
         print("\n  Топ-10 российских:")
         for i, (url, score, avg, jitter, losses) in enumerate(ru_results[:10], 1):
             name = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else url[8:48]
-            print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}  {name}")
+            sec  = _get_security(url)
+            mark = " ⚡Reality" if sec == "reality" else f" [{sec}]"
+            print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}{mark}  {name}")
 
     final_urls = [r[0] for r in intl_results] + [r[0] for r in ru_results]
 
