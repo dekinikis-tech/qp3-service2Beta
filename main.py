@@ -6,24 +6,24 @@ import urllib.parse, queue, socket, statistics, base64, urllib.request as url_re
 # ============================================================
 GID         = os.environ.get('MY_GIST_ID')
 FILE_NAME   = "vps.txt"
-SUB_FILE    = "sub.txt"    # Base64-подписка для V2RayNG / Nekobox / Streisand
+SUB_FILE    = "sub.txt"       # Base64-подписка для V2RayNG / Nekobox / Streisand
 VIEWER_FILE = "index.html"
 XRAY_BIN    = "xray"
-TOP_N_EACH  = 50   # топ отдельно для зарубежных И для российских
+TOP_N_EACH  = 50
 
 # Этап 1 — быстрый TCP-пинг
-TCP_WORKERS    = 100
-TCP_TIMEOUT    = 1.5
+TCP_WORKERS = 100
+TCP_TIMEOUT = 1.5
 
 # Этап 2 — глубокая проверка через xray
-# Динамические таймауты: если MY_SLOW_NET=1 — увеличиваем пороги для медленных соединений
+# Динамические таймауты: если MY_SLOW_NET=1 — увеличиваем пороги
 _slow = os.environ.get('MY_SLOW_NET') == '1'
 XRAY_WORKERS       = 15
 PING_ROUNDS        = 3
-MAX_PING_MS        = 6000  if _slow else 4000
-MAX_LOSS_RATE      = 0.67  if _slow else 0.5
-REQUEST_TIMEOUT    = 12.0  if _slow else 7.0
-XRAY_START_TIMEOUT = 5.0   if _slow else 3.5
+MAX_PING_MS        = 6000 if _slow else 4000
+MAX_LOSS_RATE      = 0.67 if _slow else 0.5
+REQUEST_TIMEOUT    = 12.0 if _slow else 7.0
+XRAY_START_TIMEOUT = 5.0  if _slow else 3.5
 
 TEST_URLS = [
     "http://www.instagram.com/",
@@ -32,18 +32,45 @@ TEST_URLS = [
     "http://cp.cloudflare.com/",
 ]
 
-# Единый список источников — все твои ссылки.
-# Разделение на «зарубежные» и «российские» делается по IP/домену самого сервера
-# внутри конфига (функция _is_russian_server), а не по источнику.
-SOURCES = [
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_SS+All_RUS.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
+# ============================================================
+# ИСТОЧНИКИ
+# RU_SOURCES  — конфиги заточены под Россию (SNI-RU, белые списки)
+# INT_SOURCES — публичные зарубежные серверы
+# ============================================================
+INT_SOURCES = [
+    # Epodonios — обновляется каждые 5 минут, plain-текст
+    "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/vless.txt",
+    "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/trojan.txt",
+    "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/ss.txt",
+
+    # MatinGhanbari — обновляется каждые 15 минут, большая база
+    "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/vless.txt",
+    "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/trojan.txt",
+    "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/ss.txt",
+    "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/hysteria2.txt",
+
+    # F0rc3Run — собирается из публичных источников, обновляется каждые 6 часов
+    "https://raw.githubusercontent.com/F0rc3Run/F0rc3Run/refs/heads/main/splitted-by-protocol/vless.txt",
+    "https://raw.githubusercontent.com/F0rc3Run/F0rc3Run/refs/heads/main/splitted-by-protocol/trojan.txt",
+    "https://raw.githubusercontent.com/F0rc3Run/F0rc3Run/refs/heads/main/splitted-by-protocol/shadowsocks.txt",
+
+    # sevcator — большой агрегатор, plain-текст
+    "https://raw.githubusercontent.com/sevcator/5ubscrpt10n/main/protocols/vl.txt",
+    "https://raw.githubusercontent.com/sevcator/5ubscrpt10n/main/protocols/tr.txt",
+    "https://raw.githubusercontent.com/sevcator/5ubscrpt10n/main/protocols/ss.txt",
+
+    # ebrasha — обновляется каждые 15 минут
+    "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/refs/heads/main/all_extracted_configs.txt",
+
+    # barry-far — популярный агрегатор
+    "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub1.txt",
+    "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub2.txt",
+    "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub3.txt",
 ]
+
+# Объединённый список для итерации
+SOURCES = RU_SOURCES + INT_SOURCES
+
 BLACK_LIST = [
     'meshky', '4mohsen', 'white', '708087',
     'oneclick', '4jadi', '4kian', 'yandex.net', 'vk-apps.com',
@@ -160,11 +187,8 @@ def tcp_alive(url: str) -> str | None:
     address, port = _extract_host_port(url)
     if address is None:
         return None
-        
-    # ИСПРАВЛЕНИЕ: Отсекаем мусорные данные, чтобы избежать UnicodeError(label too long)
     if len(address) > 253:
         return None
-        
     if _is_ipv6_address(address):
         return None
     if address.startswith(BLOCKED_IPS):
@@ -175,7 +199,6 @@ def tcp_alive(url: str) -> str | None:
     try:
         with socket.create_connection((address, port), timeout=TCP_TIMEOUT):
             return url
-    # ИСПРАВЛЕНИЕ: Ловим UnicodeError и ValueError, чтобы скрипт не падал из-за битых доменов
     except (OSError, UnicodeError, ValueError):
         return None
 
@@ -490,22 +513,29 @@ def _fetch_with_retry(url: str, retries: int = 3, delay: float = 2.0) -> str | N
 
 
 def fetch_configs() -> tuple[list[str], set[str]]:
-    """Возвращает (список уникальных конфигов, множество host:port российских серверов).
-    Разделение RU/INT — по IP/домену самого сервера (_is_russian_server), не по источнику."""
+    """Возвращает (список уникальных конфигов, множество host:port из RU_SOURCES)."""
     all_raw: list[str] = []
     ru_keys: set[str]  = set()
 
     for source_url in SOURCES:
+        is_ru_source = source_url in RU_SOURCES
         raw_text = _fetch_with_retry(source_url)
         if raw_text is None:
             continue
         text  = _decode_subscription(raw_text)
         found = PROTO_REGEX.findall(text)
         fmt   = "plain" if text is raw_text else "base64"
-        print(f"  [OK] {source_url}  →  {len(found)} конфигов  [{fmt}]")
+        tag   = "[RU]" if is_ru_source else "[INT]"
+        print(f"  {tag} {source_url.split('/')[-1]}  →  {len(found)} конфигов  [{fmt}]")
         all_raw.extend(found)
 
-    # Дедупликация по хосту:порту
+        if is_ru_source:
+            for cfg in found:
+                host, port = _extract_host_port(cfg)
+                if host and port:
+                    ru_keys.add(f"{host}:{port}")
+
+    # Дедупликация по хосту:порту — один и тот же IP проверяется только раз
     seen_endpoints: set[str] = set()
     unique: list[str] = []
     for cfg in all_raw:
@@ -515,8 +545,6 @@ def fetch_configs() -> tuple[list[str], set[str]]:
             if key not in seen_endpoints:
                 seen_endpoints.add(key)
                 unique.append(cfg)
-                if _is_russian_server(host):
-                    ru_keys.add(key)
         else:
             unique.append(cfg)
 
@@ -551,8 +579,8 @@ def _get_network(url: str) -> str:
 def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> str:
 
     def ping_color(avg):
-        if avg < 300:   return '#06d6a0'
-        if avg < 1000:  return '#ffd166'
+        if avg < 300:  return '#06d6a0'
+        if avg < 1000: return '#ffd166'
         return '#ef476f'
 
     def make_rows(results):
@@ -607,20 +635,12 @@ h1 {{ margin:0; padding:20px 20px 0; font-size:24px; color:#fff; }}
 .stat-lbl {{ font-size:11px; color:#718096; margin-top:4px; }}
 .tab-bar {{ padding:10px 20px; }}
 .tab-btn {{
-  display:inline-block;
-  padding:10px 30px;
-  margin-right:8px;
-  border-radius:8px;
-  border:2px solid #1e2230;
-  background:#111318;
-  color:#e2e8f0;
-  font-size:14px;
-  font-weight:700;
-  cursor:pointer;
-  text-decoration:none;
+  display:inline-block; padding:10px 30px; margin-right:8px; border-radius:8px;
+  border:2px solid #1e2230; background:#111318; color:#e2e8f0; font-size:14px;
+  font-weight:700; cursor:pointer; text-decoration:none;
 }}
 .tab-btn.active-intl {{ background:#00e5ff; color:#000; border-color:#00e5ff; }}
-.tab-btn.active-ru  {{ background:#ff6b35; color:#fff; border-color:#ff6b35; }}
+.tab-btn.active-ru   {{ background:#ff6b35; color:#fff; border-color:#ff6b35; }}
 .tab-btn:hover {{ border-color:#718096; }}
 .section {{ display:none; padding:0 20px 40px; }}
 .section.visible {{ display:block; }}
@@ -633,46 +653,31 @@ tbody tr:hover {{ background:#161b26; }}
 </style>
 </head>
 <body>
-
 <h1>VPN Scout</h1>
-<div class="info">Обновлено: <b>{updated}</b> &nbsp;|&nbsp; Время проверки: <b>{elapsed}с</b></div>
-
+<div class="info">Обновлено: <b>{updated}</b> &nbsp;|&nbsp; Время проверки: <b>{elapsed}с</b> &nbsp;|&nbsp; Google-бан фильтр: <b>✅</b></div>
 <div class="stats-row">
   <div class="stat"><div class="stat-num" style="color:#00e5ff">{len(intl_results)}</div><div class="stat-lbl">🌍 Зарубежных</div></div>
   <div class="stat"><div class="stat-num" style="color:#ff6b35">{len(ru_results)}</div><div class="stat-lbl">🇷🇺 Российских</div></div>
   <div class="stat"><div class="stat-num">{total}</div><div class="stat-lbl">Всего живых</div></div>
   <div class="stat"><div class="stat-num" style="color:#06d6a0">{best_ping}ms</div><div class="stat-lbl">Лучший пинг</div></div>
 </div>
-
 <div class="tab-bar">
   <button class="tab-btn active-intl" id="btn-intl" onclick="showTab('intl')">🌍 Зарубежные ({len(intl_results)})</button>
   <button class="tab-btn" id="btn-ru" onclick="showTab('ru')">🇷🇺 Российские ({len(ru_results)})</button>
 </div>
-
 <div class="section visible" id="sec-intl">
-  <div class="tbl-wrap">
-    <table>
-      <thead><tr><th>#</th><th>Сервер</th><th>Протокол</th><th>Транспорт</th><th>Безопасность</th><th>Пинг</th><th>Jitter</th><th>Loss</th><th></th></tr></thead>
-      <tbody>
-        {intl_rows if intl_rows else '<tr><td colspan="9" style="text-align:center;padding:30px;color:#718096">Нет серверов</td></tr>'}
-      </tbody>
-    </table>
-  </div>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>#</th><th>Сервер</th><th>Протокол</th><th>Транспорт</th><th>Безопасность</th><th>Пинг</th><th>Jitter</th><th>Loss</th><th></th></tr></thead>
+    <tbody>{intl_rows if intl_rows else '<tr><td colspan="9" style="text-align:center;padding:30px;color:#718096">Нет серверов</td></tr>'}</tbody>
+  </table></div>
 </div>
-
 <div class="section" id="sec-ru">
-  <div class="tbl-wrap">
-    <table>
-      <thead><tr><th>#</th><th>Сервер</th><th>Протокол</th><th>Транспорт</th><th>Безопасность</th><th>Пинг</th><th>Jitter</th><th>Loss</th><th></th></tr></thead>
-      <tbody>
-        {ru_rows if ru_rows else '<tr><td colspan="9" style="text-align:center;padding:30px;color:#718096">Нет серверов</td></tr>'}
-      </tbody>
-    </table>
-  </div>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>#</th><th>Сервер</th><th>Протокол</th><th>Транспорт</th><th>Безопасность</th><th>Пинг</th><th>Jitter</th><th>Loss</th><th></th></tr></thead>
+    <tbody>{ru_rows if ru_rows else '<tr><td colspan="9" style="text-align:center;padding:30px;color:#718096">Нет серверов</td></tr>'}</tbody>
+  </table></div>
 </div>
-
 <div id="toast">Скопировано!</div>
-
 <script>
 function showTab(name) {{
   document.getElementById('sec-intl').className = 'section' + (name === 'intl' ? ' visible' : '');
@@ -683,22 +688,14 @@ function showTab(name) {{
 function copyVpn(btn) {{
   var url = btn.getAttribute('data-url');
   var ta = document.createElement('textarea');
-  ta.value = url;
-  ta.style.position = 'fixed';
-  ta.style.left = '-9999px';
-  document.body.appendChild(ta);
-  ta.select();
+  ta.value = url; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+  document.body.appendChild(ta); ta.select();
   try {{
     document.execCommand('copy');
-    btn.textContent = 'OK!';
-    btn.style.color = '#06d6a0';
-    btn.style.borderColor = '#06d6a0';
-    var t = document.getElementById('toast');
-    t.className = 'show';
+    btn.textContent = 'OK!'; btn.style.color = '#06d6a0'; btn.style.borderColor = '#06d6a0';
+    var t = document.getElementById('toast'); t.className = 'show';
     setTimeout(function() {{
-      btn.textContent = 'Copy';
-      btn.style.color = '#00e5ff';
-      btn.style.borderColor = '#005f6b';
+      btn.textContent = 'Copy'; btn.style.color = '#00e5ff'; btn.style.borderColor = '#005f6b';
       t.className = '';
     }}, 1500);
   }} catch(e) {{ alert('Не удалось скопировать'); }}
@@ -716,7 +713,7 @@ function copyVpn(btn) {{
 def run():
     t_start = time.time()
     print("=" * 60)
-    print("  ЗАПУСК ПРОВЕРКИ VPN-СЕРВЕРОВ  (2-этапный)")
+    print("  VPN SCOUT — новый репозиторий (INT + RU источники)")
     print(f"  TCP-воркеры   : {TCP_WORKERS}  (таймаут {TCP_TIMEOUT}с)")
     print(f"  Xray-воркеры  : {XRAY_WORKERS}  (таймаут {XRAY_START_TIMEOUT}с)")
     print(f"  Раундов       : {PING_ROUNDS},  макс. пинг: {MAX_PING_MS}мс")
@@ -724,6 +721,7 @@ def run():
     print(f"  Динамический таймаут (MY_SLOW_NET): {'ВКЛ' if _slow else 'ВЫКЛ'}")
     print(f"  Google-бан фильтр: ВКЛ")
     print(f"  Base64-подписка: {SUB_FILE}")
+    print(f"  Источников: {len(RU_SOURCES)} RU + {len(INT_SOURCES)} INT = {len(SOURCES)} всего")
     print("=" * 60)
 
     # --- [1/4] Сбор ---
@@ -775,10 +773,9 @@ def run():
         print("❌ Нет рабочих серверов. Старый файл сохранён.")
         return
 
-    # Сортируем все результаты по score (avg + jitter/2)
     results.sort(key=lambda x: x[1])
 
-    # Делим по адресу сервера: российские (_is_russian_server) → вниз, остальные → вверх
+    # Делим: если host:port был в RU_SOURCES → российский, остальные → зарубежные
     intl_all = []
     ru_all   = []
     for entry in results:
@@ -791,9 +788,6 @@ def run():
 
     intl_results = intl_all[:TOP_N_EACH]
     ru_results   = ru_all[:TOP_N_EACH]
-
-    # Зарубежные первыми в итоговом файле
-    ordered = intl_results + ru_results
 
     print(f"\n{'─'*60}")
     print(f"  Всего: {len(all_configs)} → TCP: {len(alive)} → xray: {len(results)}")
@@ -813,37 +807,29 @@ def run():
             name = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else url[8:48]
             print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}  {name}")
 
-    # Зарубежные первыми, затем российские — без дополнительных тегов
     final_urls = [r[0] for r in intl_results] + [r[0] for r in ru_results]
 
+    # Plain-текст
     with open(FILE_NAME, "w", encoding="utf-8") as f:
         f.write("\n".join(final_urls))
     print(f"\n✅ Сохранено {len(final_urls)} серверов в {FILE_NAME}")
 
-    # Генерируем Base64-подписку (для V2RayNG / Nekobox / Streisand)
+    # Base64-подписка для V2RayNG / Nekobox / Streisand
     b64_content = base64.b64encode("\n".join(final_urls).encode("utf-8")).decode("utf-8")
     with open(SUB_FILE, "w", encoding="utf-8") as f:
         f.write(b64_content)
     print(f"✅ Base64-подписка сохранена в {SUB_FILE}")
 
-    # Генерируем HTML
+    # HTML-viewer
     html = generate_html_viewer(intl_results, ru_results, elapsed_total)
     with open(VIEWER_FILE, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"✅ HTML-viewer сохранён в {VIEWER_FILE}")
 
-    # Обновляем Gist через GitHub REST API
+    # Обновляем Gist (три файла: vps.txt + sub.txt + index.html)
     if GID:
         print("Обновляем Gist (три файла: vps.txt + sub.txt + index.html)...")
 
-        with open(FILE_NAME, "r", encoding="utf-8") as f:
-            vps_content = f.read()
-        with open(SUB_FILE, "r", encoding="utf-8") as f:
-            sub_content = f.read()
-        with open(VIEWER_FILE, "r", encoding="utf-8") as f:
-            html_content = f.read()
-
-        # ИСПРАВЛЕНИЕ: Читаем токен сразу из окружения, чтобы избежать сбоев gh в Actions
         token = os.environ.get('GH_TOKEN')
         if not token:
             try:
@@ -857,9 +843,9 @@ def run():
         if token:
             payload = json.dumps({
                 "files": {
-                    FILE_NAME:   {"content": vps_content},
-                    SUB_FILE:    {"content": sub_content},
-                    VIEWER_FILE: {"content": html_content},
+                    FILE_NAME:   {"content": "\n".join(final_urls)},
+                    SUB_FILE:    {"content": b64_content},
+                    VIEWER_FILE: {"content": html},
                 }
             }).encode("utf-8")
 
@@ -885,7 +871,7 @@ def run():
         else:
             print("❌ Не удалось получить токен GitHub (GH_TOKEN)!")
     else:
-        print("⚠️  MY_GIST_ID не задан.")
+        print("⚠️  MY_GIST_ID не задан — локальный запуск, файлы сохранены локально.")
 
 
 if __name__ == "__main__":
