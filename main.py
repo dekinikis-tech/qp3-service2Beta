@@ -36,9 +36,9 @@ TEST_URLS = [
 # ИСТОЧНИКИ
 # RU_SOURCES  — конфиги заточены под Россию (SNI-RU, белые списки)
 # INT_SOURCES — публичные зарубежные серверы
-# ============================================================
+
+RU_SOURCES = []
 INT_SOURCES = [
-    RU_SOURCES = []
     # Epodonios — обновляется каждые 5 минут, plain-текст
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/vless.txt",
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/trojan.txt",
