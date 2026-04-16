@@ -9,7 +9,7 @@ FILE_NAME   = "vps.txt"
 SUB_FILE    = "sub.txt"       # Base64-подписка для V2RayNG / Nekobox / Streisand
 VIEWER_FILE = "index.html"
 XRAY_BIN    = "xray"
-TOP_N_EACH  = 50
+TOP_N_EACH  = 300
 
 # Этап 1 — быстрый TCP-пинг
 TCP_WORKERS = 100
