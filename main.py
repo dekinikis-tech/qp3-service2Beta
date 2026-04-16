@@ -6,7 +6,7 @@ import urllib.parse, queue, socket, statistics, base64, urllib.request as url_re
 # ============================================================
 GID         = os.environ.get('MY_GIST_ID')
 FILE_NAME   = "vps.txt"
-SUB_FILE    = "sub.txt"       # Base64-подписка для V2RayNG / Nekobox / Streisand
+SUB_FILE    = "sub.txt"
 VIEWER_FILE = "index.html"
 XRAY_BIN    = "xray"
 TOP_N_EACH  = 300
@@ -16,9 +16,9 @@ TCP_WORKERS = 100
 TCP_TIMEOUT = 1.5
 
 # Этап 2 — глубокая проверка через xray
-# Динамические таймауты: если MY_SLOW_NET=1 — увеличиваем пороги
 _slow = os.environ.get('MY_SLOW_NET') == '1'
-XRAY_WORKERS       = 15
+XRAY_WORKERS       = 20
+MAX_XRAY_TOTAL     = 3000   # останавливаемся после N проверенных если топ уже набран
 PING_ROUNDS        = 3
 MAX_PING_MS        = 6000 if _slow else 4000
 MAX_LOSS_RATE      = 0.67 if _slow else 0.5
@@ -34,42 +34,31 @@ TEST_URLS = [
 
 # ============================================================
 # ИСТОЧНИКИ
-# RU_SOURCES  — конфиги заточены под Россию (SNI-RU, белые списки)
-# INT_SOURCES — публичные зарубежные серверы
+# ============================================================
+RU_SOURCES = [
+    # Добавь сюда RU-источники если появятся
+]
 
-RU_SOURCES = []
 INT_SOURCES = [
-    # Epodonios — обновляется каждые 5 минут, plain-текст
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/vless.txt",
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/trojan.txt",
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/ss.txt",
-
-    # MatinGhanbari — обновляется каждые 15 минут, большая база
     "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/vless.txt",
     "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/trojan.txt",
     "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/ss.txt",
     "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/hysteria2.txt",
-
-    # F0rc3Run — собирается из публичных источников, обновляется каждые 6 часов
     "https://raw.githubusercontent.com/F0rc3Run/F0rc3Run/refs/heads/main/splitted-by-protocol/vless.txt",
     "https://raw.githubusercontent.com/F0rc3Run/F0rc3Run/refs/heads/main/splitted-by-protocol/trojan.txt",
     "https://raw.githubusercontent.com/F0rc3Run/F0rc3Run/refs/heads/main/splitted-by-protocol/shadowsocks.txt",
-
-    # sevcator — большой агрегатор, plain-текст
     "https://raw.githubusercontent.com/sevcator/5ubscrpt10n/main/protocols/vl.txt",
     "https://raw.githubusercontent.com/sevcator/5ubscrpt10n/main/protocols/tr.txt",
     "https://raw.githubusercontent.com/sevcator/5ubscrpt10n/main/protocols/ss.txt",
-
-    # ebrasha — обновляется каждые 15 минут
     "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/refs/heads/main/all_extracted_configs.txt",
-
-    # barry-far — популярный агрегатор
     "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub1.txt",
     "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub2.txt",
     "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub3.txt",
 ]
 
-# Объединённый список для итерации
 SOURCES = RU_SOURCES + INT_SOURCES
 
 BLACK_LIST = [
@@ -123,12 +112,12 @@ RU_IP_PREFIXES = (
     '213.195.', '213.202.', '213.203.', '213.206.', '213.207.', '213.208.', '213.219.',
     '213.220.', '213.222.', '213.226.', '213.227.', '213.228.', '213.230.', '213.232.',
     '213.234.', '213.243.', '213.248.', '216.24.',
-    '158.160.',  # Yandex Cloud
-    '51.250.',   # Yandex Cloud
-    '84.201.',   # Yandex Cloud
-    '130.193.',  # Yandex Cloud
-    '62.84.',    # Mail.ru Cloud
-    '94.250.',   # VK Cloud
+    '158.160.',
+    '51.250.',
+    '84.201.',
+    '130.193.',
+    '62.84.',
+    '94.250.',
 )
 
 RU_DOMAIN_KEYWORDS = (
@@ -351,11 +340,6 @@ def _build_xray_config_trojan(url: str, port: int) -> dict | None:
 
 
 def _check_google_ban(session: requests.Session) -> bool:
-    """
-    Проверяет, не забанен ли прокси Google-ом.
-    generate_204 должен вернуть 204. Редирект на sorry.google.com = капча/бан.
-    Возвращает True если всё нормально (не забанен).
-    """
     try:
         r = session.get(
             "http://www.google.com/generate_204",
@@ -370,7 +354,7 @@ def _check_google_ban(session: requests.Session) -> bool:
                 return False
         return True
     except Exception:
-        return True  # не смогли проверить — не штрафуем
+        return True
 
 
 def test_via_xray(url: str):
@@ -411,7 +395,6 @@ def test_via_xray(url: str):
         session.trust_env = False
         session.proxies   = proxies
 
-        # --- Проверка на Google-бан ---
         if not _check_google_ban(session):
             return None
 
@@ -514,7 +497,6 @@ def _fetch_with_retry(url: str, retries: int = 3, delay: float = 2.0) -> str | N
 
 
 def fetch_configs() -> tuple[list[str], set[str]]:
-    """Возвращает (список уникальных конфигов, множество host:port из RU_SOURCES)."""
     all_raw: list[str] = []
     ru_keys: set[str]  = set()
 
@@ -536,7 +518,6 @@ def fetch_configs() -> tuple[list[str], set[str]]:
                 if host and port:
                     ru_keys.add(f"{host}:{port}")
 
-    # Дедупликация по хосту:порту — один и тот же IP проверяется только раз
     seen_endpoints: set[str] = set()
     unique: list[str] = []
     for cfg in all_raw:
@@ -719,6 +700,7 @@ def run():
     print(f"  Xray-воркеры  : {XRAY_WORKERS}  (таймаут {XRAY_START_TIMEOUT}с)")
     print(f"  Раундов       : {PING_ROUNDS},  макс. пинг: {MAX_PING_MS}мс")
     print(f"  Топ каждой гео: {TOP_N_EACH}")
+    print(f"  Макс. xray-проверок: {MAX_XRAY_TOTAL}")
     print(f"  Динамический таймаут (MY_SLOW_NET): {'ВКЛ' if _slow else 'ВЫКЛ'}")
     print(f"  Google-бан фильтр: ВКЛ")
     print(f"  Base64-подписка: {SUB_FILE}")
@@ -751,20 +733,24 @@ def run():
         return
 
     # --- [3/4] Xray ---
-    print(f"\n[3/4] Глубокая xray-проверка {len(alive)} серверов ({XRAY_WORKERS} воркеров)...")
+    print(f"\n[3/4] Глубокая xray-проверка (макс. {MAX_XRAY_TOTAL} из {len(alive)}, {XRAY_WORKERS} воркеров)...")
     results = []
     tested  = 0
-    total   = len(alive)
+    total   = min(len(alive), MAX_XRAY_TOTAL)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=XRAY_WORKERS) as ex:
-        futures = {ex.submit(test_via_xray, u): u for u in alive}
+        futures = {ex.submit(test_via_xray, u): u for u in alive[:MAX_XRAY_TOTAL]}
         for future in concurrent.futures.as_completed(futures):
             tested += 1
-            if tested % 10 == 0 or tested == total:
+            if tested % 50 == 0 or tested == total:
                 print(f"  Прогресс: {tested}/{total}  |  Прошли xray: {len(results)}")
             res = future.result()
             if res:
                 results.append(res)
+            # Ранний выход: топ уже набран, незачем продолжать
+            if len(results) >= TOP_N_EACH * 2 and tested >= total // 2:
+                print(f"  ✅ Ранний выход: набрано {len(results)} серверов при {tested} проверенных")
+                break
 
     elapsed_total = int(time.time() - t_start)
 
@@ -776,7 +762,6 @@ def run():
 
     results.sort(key=lambda x: x[1])
 
-    # Делим: если host:port был в RU_SOURCES → российский, остальные → зарубежные
     intl_all = []
     ru_all   = []
     for entry in results:
@@ -810,24 +795,20 @@ def run():
 
     final_urls = [r[0] for r in intl_results] + [r[0] for r in ru_results]
 
-    # Plain-текст
     with open(FILE_NAME, "w", encoding="utf-8") as f:
         f.write("\n".join(final_urls))
     print(f"\n✅ Сохранено {len(final_urls)} серверов в {FILE_NAME}")
 
-    # Base64-подписка для V2RayNG / Nekobox / Streisand
     b64_content = base64.b64encode("\n".join(final_urls).encode("utf-8")).decode("utf-8")
     with open(SUB_FILE, "w", encoding="utf-8") as f:
         f.write(b64_content)
     print(f"✅ Base64-подписка сохранена в {SUB_FILE}")
 
-    # HTML-viewer
     html = generate_html_viewer(intl_results, ru_results, elapsed_total)
     with open(VIEWER_FILE, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"✅ HTML-viewer сохранён в {VIEWER_FILE}")
 
-    # Обновляем Gist (три файла: vps.txt + sub.txt + index.html)
     if GID:
         print("Обновляем Gist (три файла: vps.txt + sub.txt + index.html)...")
 
