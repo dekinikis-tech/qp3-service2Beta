@@ -1,5 +1,6 @@
 import requests, os, re, subprocess, json, time, concurrent.futures
 import urllib.parse, queue, socket, statistics, base64, urllib.request as url_req
+import ipaddress
 
 # ============================================================
 # НАСТРОЙКИ
@@ -9,27 +10,32 @@ FILE_NAME   = "vps.txt"
 SUB_FILE    = "sub.txt"
 VIEWER_FILE = "index.html"
 XRAY_BIN    = "xray"
-TOP_N_EACH  = 300
+
+# Сколько серверов в итоговом топе
+TOP_N_EACH  = 100   # УМЕНЬШЕНО: 100 хороших лучше чем 300 мусорных
 
 # Этап 1 — быстрый TCP-пинг
-TCP_WORKERS = 200          # увеличено: быстрее проверяем 10к серверов
-TCP_TIMEOUT = 2.0          # чуть больше — меньше ложных отказов
+TCP_WORKERS = 200
+TCP_TIMEOUT = 2.0
 
 # Этап 2 — глубокая проверка через xray
 _slow = os.environ.get('MY_SLOW_NET') == '1'
-XRAY_WORKERS       = 40    # увеличено с 20: быстрее xray-проверка
-MAX_XRAY_TOTAL     = 10000 # снята искусственная планка — проверяем всех выживших
-PING_ROUNDS        = 3
-MAX_PING_MS        = 6000 if _slow else 5000  # чуть мягче — меньше ложных отказов
-MAX_LOSS_RATE      = 0.67 if _slow else 0.67  # тоже мягче
-REQUEST_TIMEOUT    = 15.0 if _slow else 10.0
-XRAY_START_TIMEOUT = 6.0  if _slow else 4.5
+XRAY_WORKERS        = 50   # больше воркеров
+MAX_XRAY_TOTAL      = 15000
+PING_ROUNDS         = 5    # УВЕЛИЧЕНО: 5 раундов вместо 3 — более надёжная оценка
+MAX_PING_MS         = 3000 if _slow else 2000  # СТРОЖЕ: 2000мс вместо 5000мс
+MAX_LOSS_RATE       = 0.0  # СТРОЖЕ: НУЛЕВЫЕ потери — только 100% рабочие серверы
+REQUEST_TIMEOUT     = 12.0 if _slow else 8.0
+XRAY_START_TIMEOUT  = 6.0  if _slow else 5.0
 
-# ============================================================
-# ПРИОРИТЕТ REALITY
-# Reality-серверы самые стабильные — они идут первыми на xray-проверку
-# ============================================================
-REALITY_BONUS_SCORE = -500  # вычитаем из score чтобы поднять выше в топе
+# Reality-приоритет
+REALITY_BONUS_SCORE = -1000  # сильнее поднимаем Reality в топе
+
+# Режим: если True — в топ идут ТОЛЬКО Reality-серверы (с fallback если их мало)
+REALITY_ONLY_TOP = os.environ.get('REALITY_ONLY', '1') == '1'
+
+# Дедупликация по /24 подсети — не берём более N серверов с одной подсети
+MAX_PER_SUBNET_24 = 3
 
 TEST_URLS = [
     "http://www.gstatic.com/generate_204",
@@ -41,9 +47,7 @@ TEST_URLS = [
 # ============================================================
 # ИСТОЧНИКИ
 # ============================================================
-RU_SOURCES = [
-    # Добавь RU-источники здесь если появятся
-]
+RU_SOURCES = []
 
 INT_SOURCES = [
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/vless.txt",
@@ -63,15 +67,18 @@ INT_SOURCES = [
     "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub1.txt",
     "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub2.txt",
     "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub3.txt",
+    # Дополнительные источники Reality-конфигов
+    "https://raw.githubusercontent.com/coldwater-10/V2Hub2/main/split/vless.txt",
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/reality",
+    "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/reality",
+    "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/sub.txt",
+    "https://raw.githubusercontent.com/mfuu/v2ray/master/v2ray",
 ]
 
 SOURCES = RU_SOURCES + INT_SOURCES
 
 # ============================================================
-# ФИЛЬТРЫ — ИСПРАВЛЕНО
-# Убран 'oneclick' — он уничтожал большинство серверов.
-# Оставлены только реально вредные: российские сервисы и мусорные
-# источники которые дают нерабочие конфиги.
+# ФИЛЬТРЫ
 # ============================================================
 BLACK_LIST = [
     'meshky', '4mohsen', '708087',
@@ -79,13 +86,11 @@ BLACK_LIST = [
     'yandex.net', 'vk-apps.com', 'vk.com', 'mail.ru',
 ]
 
-# BLOCKED_IPS: только Cloudflare WARP и Яндекс облако.
-# Убраны широкие Cloudflare CDN диапазоны — они могут быть рабочими прокси.
 BLOCKED_IPS = (
-    '158.160.',   # Яндекс облако
-    '51.250.',    # Яндекс облако
-    '84.201.',    # Яндекс облако
-    '130.193.',   # Яндекс облако
+    '158.160.',
+    '51.250.',
+    '84.201.',
+    '130.193.',
 )
 
 RU_IP_PREFIXES = (
@@ -147,12 +152,12 @@ PROTO_REGEX = re.compile(
 )
 
 port_queue: queue.Queue = queue.Queue()
-for _p in range(25000, 25000 + XRAY_WORKERS):
+for _p in range(25000, 25000 + XRAY_WORKERS + 10):
     port_queue.put(_p)
 
 
 # ============================================================
-# ГЕОЛОКАЦИЯ
+# ГЕОЛОКАЦИЯ И ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================================
 
 def _is_russian_server(address: str) -> bool:
@@ -166,13 +171,20 @@ def _is_russian_server(address: str) -> bool:
 
 
 def _is_reality(url: str) -> bool:
-    """Определяет, использует ли сервер протокол Reality."""
     return 'security=reality' in url
 
 
-# ============================================================
-# ЭТАП 1: БЫСТРАЯ TCP-ПРОВЕРКА
-# ============================================================
+def _get_subnet_24(host: str) -> str:
+    """Возвращает /24 подсеть для IP-адреса или сам хост для доменов."""
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.version == 4:
+            parts = host.split('.')
+            return f"{parts[0]}.{parts[1]}.{parts[2]}"
+        return host
+    except ValueError:
+        return host
+
 
 def _is_ipv6_address(host: str) -> bool:
     return ':' in host or (host.startswith('[') and host.endswith(']'))
@@ -372,8 +384,7 @@ def _build_xray_config_trojan(url: str, port: int) -> dict | None:
 def test_via_xray(url: str):
     """
     Реальная проверка через xray для VLESS и Trojan.
-    Hysteria2 и SS пропускаются — xray их не поддерживает как outbound в данной схеме,
-    поэтому они вообще не добавляются в финальный список (только реально проверенные).
+    Строгий режим: 0% потерь, пинг < MAX_PING_MS, низкий джиттер.
     """
     port     = port_queue.get()
     cfg_file = f"cfg_{port}.json"
@@ -389,8 +400,6 @@ def test_via_xray(url: str):
             if config is None:
                 return None
         else:
-            # hysteria2 и ss — xray не тестирует их через HTTP-прокси
-            # НЕ даём фиктивный результат — пропускаем, чтобы не засорять топ
             return None
 
         with open(cfg_file, "w") as f:
@@ -423,7 +432,6 @@ def test_via_xray(url: str):
                     t0      = time.perf_counter()
                     r       = session.get(test_url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
                     elapsed = int((time.perf_counter() - t0) * 1000)
-                    # Принимаем: 200, 204 (connectivity check), 301/302 (редирект — соединение есть)
                     if r.status_code in (200, 204, 301, 302):
                         pings.append(elapsed)
                         success = True
@@ -435,7 +443,10 @@ def test_via_xray(url: str):
 
         if not pings:
             return None
-        if losses / PING_ROUNDS > MAX_LOSS_RATE:
+
+        # СТРОГО: нулевые потери
+        loss_rate = losses / PING_ROUNDS
+        if loss_rate > MAX_LOSS_RATE:
             return None
 
         avg_ping = int(statistics.mean(pings))
@@ -444,7 +455,10 @@ def test_via_xray(url: str):
 
         jitter = int(statistics.stdev(pings)) if len(pings) > 1 else 0
 
-        # Reality-бонус: опускаем score вниз чтобы они оказались выше в топе
+        # Фильтр нестабильных серверов по джиттеру
+        if jitter > avg_ping * 0.8:
+            return None
+
         is_reality = _is_reality(url)
         score = avg_ping + jitter // 2
         if is_reality:
@@ -513,13 +527,17 @@ def _fetch_with_retry(url: str, retries: int = 3, delay: float = 2.0) -> str | N
                 print(f"  [RETRY {attempt}/{retries}] {url}: {e}")
                 time.sleep(delay)
             else:
-                print(f"  [WARN] Не удалось загрузить после {retries} попыток: {url}: {e}")
+                print(f"  [WARN] Не удалось загрузить: {url}: {e}")
     return None
 
 
-def fetch_configs() -> tuple[list[str], set[str]]:
-    all_raw: list[str] = []
-    ru_keys: set[str]  = set()
+def fetch_configs() -> tuple:
+    """
+    Возвращает (all_configs, reality_configs, other_configs, ru_keys).
+    reality_configs — отдельный список для приоритетной обработки.
+    """
+    all_raw: list = []
+    ru_keys: set  = set()
 
     for source_url in SOURCES:
         is_ru_source = source_url in RU_SOURCES
@@ -528,9 +546,9 @@ def fetch_configs() -> tuple[list[str], set[str]]:
             continue
         text  = _decode_subscription(raw_text)
         found = PROTO_REGEX.findall(text)
-        fmt   = "plain" if text is raw_text else "base64"
+        fmt   = "base64" if text is not raw_text else "plain"
         tag   = "[RU]" if is_ru_source else "[INT]"
-        print(f"  {tag} {source_url.split('/')[-1]}  →  {len(found)} конфигов  [{fmt}]")
+        print(f"  {tag} {source_url.split('/')[-1]}  =>  {len(found)} конфигов  [{fmt}]")
         all_raw.extend(found)
 
         if is_ru_source:
@@ -539,8 +557,8 @@ def fetch_configs() -> tuple[list[str], set[str]]:
                 if host and port:
                     ru_keys.add(f"{host}:{port}")
 
-    seen_endpoints: set[str] = set()
-    unique: list[str] = []
+    seen_endpoints: set = set()
+    unique: list = []
     for cfg in all_raw:
         host, port = _extract_host_port(cfg)
         if host and port:
@@ -551,7 +569,32 @@ def fetch_configs() -> tuple[list[str], set[str]]:
         else:
             unique.append(cfg)
 
-    return unique, ru_keys
+    reality_configs = [u for u in unique if _is_reality(u)]
+    other_configs   = [u for u in unique if not _is_reality(u)]
+
+    print(f"      Из них Reality: {len(reality_configs)} / Остальные: {len(other_configs)}")
+
+    return unique, reality_configs, other_configs, ru_keys
+
+
+def _deduplicate_by_subnet(results: list, max_per_subnet: int = MAX_PER_SUBNET_24) -> list:
+    """
+    Убирает дубликаты по /24 подсети: не более max_per_subnet серверов
+    из одной подсети. Предотвращает доминирование одного хостера в топе.
+    """
+    subnet_count: dict = {}
+    deduped = []
+    for entry in results:
+        host, _ = _extract_host_port(entry[0])
+        if not host:
+            deduped.append(entry)
+            continue
+        subnet = _get_subnet_24(host)
+        count  = subnet_count.get(subnet, 0)
+        if count < max_per_subnet:
+            subnet_count[subnet] = count + 1
+            deduped.append(entry)
+    return deduped
 
 
 # ============================================================
@@ -600,8 +643,6 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
             pc       = ping_color(avg)
             safe_url = url.replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;').replace("'", '&#39;')
             safe_tag = tag.replace('<', '&lt;').replace('>', '&gt;')
-
-            # Reality-метка
             reality_mark = ' ⚡' if security == 'reality' else ''
 
             proto_colors = {
@@ -629,7 +670,7 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
                 f'<td class="td-ping"><span class="ping-val" style="color:{pc}">{avg}</span><span class="ping-unit">ms</span></td>' +
                 f'<td class="td-jitter td-hide" style="color:#64748b;font-family:monospace;font-size:11px">{jitter}ms</td>' +
                 f'<td class="td-loss"><span class="loss-dot" style="background:{"#22c55e" if loss_pct==0 else "#ef4444"}"></span><span style="color:{"#22c55e" if loss_pct==0 else "#ef4444"};font-size:12px">{loss_pct}%</span></td>' +
-                f'<td class="td-copy"><button class="copy-btn" onclick="copyVpn(this)" data-url="{safe_url}" title="Copy config"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button></td>' +
+                f'<td class="td-copy"><button class="copy-btn" onclick="copyVpn(this)" data-url="{safe_url}" title="Copy config"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2v1"/></svg></button></td>' +
                 f'</tr>'
             )
         return '\n'.join(rows)
@@ -640,6 +681,7 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
     updated   = time.strftime('%d %b %Y · %H:%M UTC', time.gmtime())
     best_ping = min((r[2] for r in intl_results), default=0)
     reality_count = sum(1 for r in (intl_results + ru_results) if _is_reality(r[0]))
+    reality_pct   = int(reality_count / total * 100) if total else 0
 
     return f"""<!DOCTYPE html>
 <html lang="ru">
@@ -725,7 +767,7 @@ thead th{{background:var(--bg0);color:var(--text3);font-size:10px;text-transform
   <div class="stat"><div class="stat-val" style="color:#fb923c">{len(ru_results)}</div><div class="stat-lbl">Russian</div></div>
   <div class="stat"><div class="stat-val">{total}</div><div class="stat-lbl">Total alive</div></div>
   <div class="stat"><div class="stat-val" style="color:var(--green)">{best_ping}ms</div><div class="stat-lbl">Best ping</div></div>
-  <div class="stat"><div class="stat-val" style="color:var(--reality)">⚡{reality_count}</div><div class="stat-lbl">Reality</div></div>
+  <div class="stat"><div class="stat-val" style="color:var(--reality)">⚡{reality_count} ({reality_pct}%)</div><div class="stat-lbl">Reality</div></div>
 </div>
 <div class="content">
 <div class="sub-banner">
@@ -813,7 +855,7 @@ function copyVpn(btn){{
     var t=document.getElementById('toast');t.className='show';
     setTimeout(function(){{
       btn.classList.remove('ok');
-      btn.innerHTML='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+      btn.innerHTML='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2v1"/></svg>';
       t.className='';
     }},1600);
   }}catch(e){{alert('Copy failed');}}
@@ -827,52 +869,73 @@ function copyVpn(btn){{
 def run():
     t_start = time.time()
     print("=" * 60)
-    print("  VPN SCOUT — оптимизированная версия")
-    print(f"  TCP-воркеры   : {TCP_WORKERS}  (таймаут {TCP_TIMEOUT}с)")
-    print(f"  Xray-воркеры  : {XRAY_WORKERS}  (таймаут {XRAY_START_TIMEOUT}с)")
-    print(f"  Раундов       : {PING_ROUNDS},  макс. пинг: {MAX_PING_MS}мс")
-    print(f"  Топ каждой гео: {TOP_N_EACH}")
-    print(f"  Макс. xray-проверок: {MAX_XRAY_TOTAL}")
+    print("  VPN SCOUT — УЛУЧШЕННАЯ ВЕРСИЯ v2")
+    print(f"  TCP-воркеры    : {TCP_WORKERS}  (таймаут {TCP_TIMEOUT}с)")
+    print(f"  Xray-воркеры   : {XRAY_WORKERS}  (таймаут {XRAY_START_TIMEOUT}с)")
+    print(f"  Раундов        : {PING_ROUNDS},  макс. пинг: {MAX_PING_MS}мс")
+    print(f"  Макс. потерь   : {int(MAX_LOSS_RATE*100)}%  (строгий режим)")
+    print(f"  Топ каждой гео : {TOP_N_EACH}")
+    print(f"  Reality-only топ: {'ВКЛ' if REALITY_ONLY_TOP else 'ВЫКЛ'}")
+    print(f"  Дедуп /24 сеть : макс {MAX_PER_SUBNET_24} сервера с подсети")
     print(f"  Динамический таймаут (MY_SLOW_NET): {'ВКЛ' if _slow else 'ВЫКЛ'}")
     print(f"  Reality-приоритет: ВКЛ (бонус {REALITY_BONUS_SCORE}мс к score)")
-    print(f"  Base64-подписка: {SUB_FILE}")
+    print(f"  Base64-подписка : {SUB_FILE}")
     print(f"  Источников: {len(RU_SOURCES)} RU + {len(INT_SOURCES)} INT = {len(SOURCES)} всего")
     print("=" * 60)
 
     # --- [1/4] Сбор ---
     print("\n[1/4] Сбор конфигов...")
-    all_configs, ru_source_keys = fetch_configs()
+    all_configs, reality_configs, other_configs, ru_source_keys = fetch_configs()
     print(f"      Итого уникальных (по хосту:порту): {len(all_configs)}")
     if not all_configs:
         print("Нет кандидатов.")
         return
 
     # --- [2/4] TCP ---
+    # Стратегия: сначала TCP-проверяем Reality, потом остальные
     print(f"\n[2/4] Быстрая TCP-проверка ({TCP_WORKERS} воркеров)...")
-    alive = []
+    print(f"      Сначала Reality ({len(reality_configs)} шт.), потом остальные ({len(other_configs)} шт.)...")
+
+    alive_reality = []
+    alive_other   = []
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=TCP_WORKERS) as ex:
         for future in concurrent.futures.as_completed(
-            {ex.submit(tcp_alive, u): u for u in all_configs}
+            {ex.submit(tcp_alive, u): u for u in reality_configs}
         ):
             result = future.result()
             if result:
-                alive.append(result)
+                alive_reality.append(result)
+
+    print(f"      Reality TCP живых: {len(alive_reality)} / {len(reality_configs)}")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=TCP_WORKERS) as ex:
+        for future in concurrent.futures.as_completed(
+            {ex.submit(tcp_alive, u): u for u in other_configs}
+        ):
+            result = future.result()
+            if result:
+                alive_other.append(result)
 
     elapsed_tcp = int(time.time() - t_start)
-    print(f"      TCP живых: {len(alive)} / {len(all_configs)}  ({elapsed_tcp}с)")
-    if not alive:
+    total_alive = len(alive_reality) + len(alive_other)
+    print(f"      Прочих TCP живых: {len(alive_other)} / {len(other_configs)}")
+    print(f"      Итого TCP живых: {total_alive} / {len(all_configs)}  ({elapsed_tcp}с)")
+
+    if not total_alive:
         print("Нет живых серверов после TCP-проверки.")
         return
 
-    # Reality-серверы идут первыми на xray-проверку — они важнее
-    alive_sorted = sorted(alive, key=lambda u: (0 if _is_reality(u) else 1))
-    reality_in_alive = sum(1 for u in alive if _is_reality(u))
-    print(f"      Из них Reality: {reality_in_alive}")
-
     # --- [3/4] Xray ---
-    to_check = alive_sorted[:MAX_XRAY_TOTAL]
+    # Reality идут ПЕРВЫМИ и получают весь лимит
+    reality_xray_limit = min(len(alive_reality), MAX_XRAY_TOTAL)
+    other_xray_limit   = min(len(alive_other), MAX_XRAY_TOTAL - reality_xray_limit)
+
+    to_check = alive_reality[:reality_xray_limit] + alive_other[:other_xray_limit]
     print(f"\n[3/4] Глубокая xray-проверка ({len(to_check)} серверов, {XRAY_WORKERS} воркеров)...")
-    print(f"      Reality идут первыми в очереди ({reality_in_alive} шт.)")
+    print(f"      Reality в очереди: {reality_xray_limit} шт. | Прочих: {other_xray_limit} шт.")
+    print(f"      Фильтры: макс пинг {MAX_PING_MS}мс, потери {int(MAX_LOSS_RATE*100)}%, раундов {PING_ROUNDS}")
+
     results = []
     tested  = 0
     total   = len(to_check)
@@ -883,7 +946,8 @@ def run():
             tested += 1
             if tested % 100 == 0 or tested == total:
                 reality_ok = sum(1 for r in results if _is_reality(r[0]))
-                print(f"  Прогресс: {tested}/{total}  |  Прошли xray: {len(results)}  |  Reality OK: {reality_ok}")
+                other_ok   = len(results) - reality_ok
+                print(f"  Прогресс: {tested}/{total}  |  Прошли: {len(results)}  |  Reality: {reality_ok}  |  Прочих: {other_ok}")
             res = future.result()
             if res:
                 results.append(res)
@@ -893,10 +957,10 @@ def run():
     # --- [4/4] Сохранение ---
     print(f"\n[4/4] Сохранение...")
     if not results:
-        print("❌ Нет рабочих серверов. Старый файл сохранён.")
+        print("Нет рабочих серверов. Старый файл сохранён.")
         return
 
-    results.sort(key=lambda x: x[1])  # сортировка по score (Reality идут выше)
+    results.sort(key=lambda x: x[1])
 
     intl_all = []
     ru_all   = []
@@ -908,16 +972,35 @@ def run():
         else:
             intl_all.append(entry)
 
-    intl_results = intl_all[:TOP_N_EACH]
-    ru_results   = ru_all[:TOP_N_EACH]
+    # Дедупликация по /24 подсети
+    intl_all = _deduplicate_by_subnet(intl_all)
+    ru_all   = _deduplicate_by_subnet(ru_all)
+
+    # Reality-only топ с fallback
+    if REALITY_ONLY_TOP:
+        intl_top_pool = [e for e in intl_all if _is_reality(e[0])]
+        ru_top_pool   = [e for e in ru_all   if _is_reality(e[0])]
+        if len(intl_top_pool) < TOP_N_EACH:
+            intl_fallback = [e for e in intl_all if not _is_reality(e[0])]
+            intl_top_pool += intl_fallback
+        if len(ru_top_pool) < TOP_N_EACH:
+            ru_fallback = [e for e in ru_all if not _is_reality(e[0])]
+            ru_top_pool += ru_fallback
+    else:
+        intl_top_pool = intl_all
+        ru_top_pool   = ru_all
+
+    intl_results = intl_top_pool[:TOP_N_EACH]
+    ru_results   = ru_top_pool[:TOP_N_EACH]
 
     reality_total = sum(1 for r in (intl_results + ru_results) if _is_reality(r[0]))
+    reality_pct   = int(reality_total / max(len(intl_results) + len(ru_results), 1) * 100)
 
     print(f"\n{'─'*60}")
-    print(f"  Всего: {len(all_configs)} → TCP: {len(alive)} → xray: {len(results)}")
-    print(f"  🌍 Зарубежных: найдено {len(intl_all)}, в топе: {len(intl_results)}")
-    print(f"  🇷🇺 Российских: найдено {len(ru_all)}, в топе: {len(ru_results)}")
-    print(f"  ⚡ Reality в финале: {reality_total}")
+    print(f"  Всего: {len(all_configs)} => TCP: {total_alive} => xray: {len(results)}")
+    print(f"  Зарубежных: найдено {len(intl_all)}, в топе: {len(intl_results)}")
+    print(f"  Российских: найдено {len(ru_all)}, в топе: {len(ru_results)}")
+    print(f"  Reality в финале: {reality_total} ({reality_pct}%)")
     print(f"  Время: {elapsed_total}с")
     print(f"{'─'*60}")
 
@@ -925,7 +1008,7 @@ def run():
     for i, (url, score, avg, jitter, losses) in enumerate(intl_results[:10], 1):
         name = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else url[8:48]
         sec  = _get_security(url)
-        mark = " ⚡Reality" if sec == "reality" else f" [{sec}]"
+        mark = " Reality" if sec == "reality" else f" [{sec}]"
         print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}{mark}  {name}")
 
     if ru_results:
@@ -933,24 +1016,24 @@ def run():
         for i, (url, score, avg, jitter, losses) in enumerate(ru_results[:10], 1):
             name = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else url[8:48]
             sec  = _get_security(url)
-            mark = " ⚡Reality" if sec == "reality" else f" [{sec}]"
+            mark = " Reality" if sec == "reality" else f" [{sec}]"
             print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}{mark}  {name}")
 
     final_urls = [r[0] for r in intl_results] + [r[0] for r in ru_results]
 
     with open(FILE_NAME, "w", encoding="utf-8") as f:
         f.write("\n".join(final_urls))
-    print(f"\n✅ Сохранено {len(final_urls)} серверов в {FILE_NAME}")
+    print(f"\nСохранено {len(final_urls)} серверов в {FILE_NAME}")
 
     b64_content = base64.b64encode("\n".join(final_urls).encode("utf-8")).decode("utf-8")
     with open(SUB_FILE, "w", encoding="utf-8") as f:
         f.write(b64_content)
-    print(f"✅ Base64-подписка сохранена в {SUB_FILE}")
+    print(f"Base64-подписка сохранена в {SUB_FILE}")
 
     html = generate_html_viewer(intl_results, ru_results, elapsed_total)
     with open(VIEWER_FILE, "w", encoding="utf-8") as f:
         f.write(html)
-    print(f"✅ HTML-viewer сохранён в {VIEWER_FILE}")
+    print(f"HTML-viewer сохранён в {VIEWER_FILE}")
 
     if GID:
         print("Обновляем Gist (три файла: vps.txt + sub.txt + index.html)...")
@@ -988,15 +1071,15 @@ def run():
             try:
                 with url_req.urlopen(req) as resp:
                     if resp.status == 200:
-                        print("✅ Gist обновлён.")
+                        print("Gist обновлён.")
                     else:
-                        print(f"❌ Gist ошибка: статус {resp.status}")
+                        print(f"Gist ошибка: статус {resp.status}")
             except Exception as e:
-                print(f"❌ Gist ошибка: {e}")
+                print(f"Gist ошибка: {e}")
         else:
-            print("❌ Не удалось получить токен GitHub (GH_TOKEN)!")
+            print("Не удалось получить токен GitHub (GH_TOKEN)!")
     else:
-        print("⚠️  MY_GIST_ID не задан — локальный запуск, файлы сохранены локально.")
+        print("MY_GIST_ID не задан — локальный запуск, файлы сохранены локально.")
 
 
 if __name__ == "__main__":
