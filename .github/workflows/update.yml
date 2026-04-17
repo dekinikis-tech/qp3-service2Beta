@@ -2,7 +2,7 @@ name: VPN Auto Update
 
 on:
   schedule:
-    - cron: '0 */2 * * *'   # каждые 2 часа — INT+RU источников стало больше,
+    - cron: '0 */3 * * *'   # каждые 2 часа — INT+RU источников стало больше,
                               # за час не всегда успевает
   workflow_dispatch:          # ручной запуск из вкладки Actions
 
@@ -15,7 +15,7 @@ jobs:
   update_gist:
     runs-on: ubuntu-latest
     # С RU+INT источниками и TOP_N_EACH=50 нужно ~40 минут на слабой машине
-    timeout-minutes: 55
+    timeout-minutes: 120
 
     steps:
       # ── 1. Получаем код репозитория ───────────────────────────────────────
