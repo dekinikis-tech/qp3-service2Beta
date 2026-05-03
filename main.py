@@ -1,56 +1,64 @@
 import requests, os, re, subprocess, json, time, concurrent.futures
 import urllib.parse, queue, socket, statistics, base64, urllib.request as url_req
-import ipaddress
 
 # ============================================================
 # НАСТРОЙКИ
 # ============================================================
 GID         = os.environ.get('MY_GIST_ID')
 FILE_NAME   = "vps.txt"
-SUB_FILE    = "sub.txt"
+SUB_FILE    = "sub.txt"    # Base64-подписка для V2RayNG / Nekobox / Streisand
 VIEWER_FILE = "index.html"
 XRAY_BIN    = "xray"
+TOP_N_EACH  = 900   # топ отдельно для зарубежных И для российских
 
-# Сколько серверов в итоговом топе
-TOP_N_EACH  = 100   # УМЕНЬШЕНО: 100 хороших лучше чем 300 мусорных
+# ============================================================
+# ФИЛЬТРЫ СЕРВЕРОВ
+# ============================================================
+on  = True   # псевдоним для удобства
+off = False  # псевдоним для удобства
+
+FILTER_INSECURE    = on    # on = скрыть ⚠️  небезопасные (нет TLS / allowInsecure=1)
+FILTER_LOCK        = on    # on = скрыть 🔒  обычный TLS  (оставить только Reality 🔑)
+FILTER_RUSSIAN     = on    # on = скрыть 🇷🇺  российские  (IP + домен + тег + SNI)
+FILTER_INVALID_PBK = on    # on = скрыть серверы с невалидным pbk ключом Reality
+FILTER_DEAD_SNI    = on    # on = скрыть серверы у которых SNI-сайт не отвечает
+
+# Таймаут проверки SNI (секунды)
+SNI_CHECK_TIMEOUT  = 4.0
+
+# ============================================================
+# ЦЕПОЧКА ЧЕРЕЗ РОССИЙСКИЕ СЕРВЕРЫ (chain proxy)
+# ============================================================
+# Если on — зарубежные серверы проверяются через российские как прокси.
+# Российские серверы используются ТОЛЬКО внутри скрипта как инструмент.
+# В финальный список они НЕ попадают (управляется FILTER_RUSSIAN отдельно).
+
+CHAIN_PROXY = on   # on = проверять зарубежные через российские серверы
+CHAIN_TOP_N = 5     # сколько лучших российских брать в цепочку
 
 # Этап 1 — быстрый TCP-пинг
-TCP_WORKERS = 200
-TCP_TIMEOUT = 2.0
+TCP_WORKERS    = 100
+TCP_TIMEOUT    = 1.5
 
 # Этап 2 — глубокая проверка через xray
+# Динамические таймауты: если MY_SLOW_NET=1 — увеличиваем пороги для медленных соединений
 _slow = os.environ.get('MY_SLOW_NET') == '1'
-XRAY_WORKERS        = 50   # больше воркеров
-MAX_XRAY_TOTAL      = 15000
-PING_ROUNDS         = 5    # УВЕЛИЧЕНО: 5 раундов вместо 3 — более надёжная оценка
-MAX_PING_MS         = 3000 if _slow else 2000  # СТРОЖЕ: 2000мс вместо 5000мс
-MAX_LOSS_RATE       = 0.0  # СТРОЖЕ: НУЛЕВЫЕ потери — только 100% рабочие серверы
-REQUEST_TIMEOUT     = 12.0 if _slow else 8.0
-XRAY_START_TIMEOUT  = 6.0  if _slow else 5.0
-
-# Reality-приоритет
-REALITY_BONUS_SCORE = -1000  # сильнее поднимаем Reality в топе
-
-# Режим: если True — в топ идут ТОЛЬКО Reality-серверы (с fallback если их мало)
-REALITY_ONLY_TOP = os.environ.get('REALITY_ONLY', '1') == '1'
-
-# Дедупликация по /24 подсети — не берём более N серверов с одной подсети
-MAX_PER_SUBNET_24 = 3
+XRAY_WORKERS       = 15
+PING_ROUNDS        = 3
+MAX_PING_MS        = 6000  if _slow else 4000
+MAX_LOSS_RATE      = 0.67  if _slow else 0.5
+REQUEST_TIMEOUT    = 12.0  if _slow else 7.0
+XRAY_START_TIMEOUT = 5.0   if _slow else 3.5
 
 TEST_URLS = [
+    "http://www.instagram.com/",
+    "http://www.facebook.com/",
     "http://www.gstatic.com/generate_204",
     "http://cp.cloudflare.com/",
-    "http://connectivitycheck.gstatic.com/generate_204",
-    "http://www.msftncsi.com/ncsi.txt",
 ]
 
-# ============================================================
-# ИСТОЧНИКИ
-# ============================================================
-RU_SOURCES = []
-
-INT_SOURCES = [
-    "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/vless.txt",
+SOURCES = [
+        "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/vless.txt",
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/trojan.txt",
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/ss.txt",
     "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/vless.txt",
@@ -74,23 +82,15 @@ INT_SOURCES = [
     "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/sub.txt",
     "https://raw.githubusercontent.com/mfuu/v2ray/master/v2ray",
 ]
-
-SOURCES = RU_SOURCES + INT_SOURCES
-
-# ============================================================
-# ФИЛЬТРЫ
-# ============================================================
 BLACK_LIST = [
-    'meshky', '4mohsen', '708087',
-    '4jadi', '4kian',
-    'yandex.net', 'vk-apps.com', 'vk.com', 'mail.ru',
+    'meshky', '4mohsen', 'white', '708087',
+    'oneclick', '4jadi', '4kian', 'yandex.net', 'vk-apps.com',
 ]
 
 BLOCKED_IPS = (
-    '158.160.',
-    '51.250.',
-    '84.201.',
-    '130.193.',
+    '104.', '172.64.', '172.65.', '172.66.', '172.67.',
+    '188.114.', '162.159.', '108.162.', '158.160.',
+    '51.250.', '84.201.',
 )
 
 RU_IP_PREFIXES = (
@@ -133,8 +133,18 @@ RU_IP_PREFIXES = (
     '213.195.', '213.202.', '213.203.', '213.206.', '213.207.', '213.208.', '213.219.',
     '213.220.', '213.222.', '213.226.', '213.227.', '213.228.', '213.230.', '213.232.',
     '213.234.', '213.243.', '213.248.', '216.24.',
-    '62.84.',
-    '94.250.',
+    '5.178.',    '5.188.',    '5.189.',
+    '80.93.',    '80.249.',
+    '82.202.',   '82.203.',
+    '91.206.',   '91.207.',
+    '103.213.',
+    '217.16.',   '217.17.',
+    '158.160.',  # Yandex Cloud
+    '51.250.',   # Yandex Cloud
+    '84.201.',   # Yandex Cloud
+    '130.193.',  # Yandex Cloud
+    '62.84.',    # Mail.ru Cloud
+    '94.250.',   # VK Cloud
 )
 
 RU_DOMAIN_KEYWORDS = (
@@ -152,39 +162,261 @@ PROTO_REGEX = re.compile(
 )
 
 port_queue: queue.Queue = queue.Queue()
-for _p in range(25000, 25000 + XRAY_WORKERS + 10):
+for _p in range(25000, 25000 + XRAY_WORKERS):
     port_queue.put(_p)
 
 
 # ============================================================
-# ГЕОЛОКАЦИЯ И ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ГЕОЛОКАЦИЯ
 # ============================================================
 
-def _is_russian_server(address: str) -> bool:
+# Ключевые слова которые встречаются в тегах (#...) российских серверов
+RU_TAG_KEYWORDS = (
+    'russia', 'russian', 'россия', 'рф', '\U0001f1f7\U0001f1fa',
+    '%f0%9f%87%b7%f0%9f%87%ba',  # 🇷🇺 в URL-encode
+)
+
+# Российские SNI-домены которые используются как маскировка
+RU_SNI_KEYWORDS = (
+    'ozone.ru', 'vk.com', 'vk-apps', 'x5.ru', 'max.ru',
+    'firstvideocdn.ru', 'eh.vk', 'mail.ru', 'yandex.',
+    'sber.', 'gosuslugi.', 'mos.ru', 'rmp-inc',
+)
+
+
+def _is_russian_server(address: str, url: str = '') -> bool:
+    """
+    Проверяет является ли сервер российским.
+    Три уровня проверки:
+      1. IP-адрес — входит ли в RU_IP_PREFIXES
+      2. Домен/адрес — содержит ли RU_DOMAIN_KEYWORDS
+      3. Тег (#...) и SNI — содержит ли упоминание России
+    """
     addr_lower = address.lower()
-    if any(kw in addr_lower for kw in RU_DOMAIN_KEYWORDS):
-        return True
+
+    # 1. Проверка IP-префикса
     if address and address[0].isdigit():
         if address.startswith(RU_IP_PREFIXES):
             return True
+
+    # 2. Проверка домена/адреса сервера
+    if any(kw in addr_lower for kw in RU_DOMAIN_KEYWORDS):
+        return True
+
+    # 3. Проверка тега и SNI в полном URL
+    if url:
+        url_lower = url.lower()
+
+        # Тег после #
+        if '#' in url:
+            tag_raw = url.split('#', 1)[1].lower()
+            tag_decoded = urllib.parse.unquote(tag_raw).lower()
+            if any(kw in tag_raw for kw in RU_TAG_KEYWORDS):
+                return True
+            if any(kw in tag_decoded for kw in RU_TAG_KEYWORDS):
+                return True
+
+        # SNI-домен в параметрах
+        sni_match = re.search(r'[?&]sni=([^&#+]+)', url_lower)
+        if sni_match:
+            sni = urllib.parse.unquote(sni_match.group(1))
+            if any(kw in sni for kw in RU_SNI_KEYWORDS):
+                return True
+
     return False
 
 
-def _is_reality(url: str) -> bool:
-    return 'security=reality' in url
+# ============================================================
+# БЕЗОПАСНОСТЬ СЕРВЕРА
+# ============================================================
+
+def _get_proto(url: str) -> str:
+    for p in ('vless', 'trojan', 'hysteria2', 'ss'):
+        if url.startswith(p + '://'):
+            return p.upper()
+    return 'UNKNOWN'
 
 
-def _get_subnet_24(host: str) -> str:
-    """Возвращает /24 подсеть для IP-адреса или сам хост для доменов."""
+def _get_security(url: str) -> str:
+    m = re.search(r'[?&]security=([^&#+]+)', url)
+    if m:
+        return m.group(1)
+    if 'trojan://' in url:
+        return 'tls'
+    return 'none'
+
+
+def _get_network(url: str) -> str:
+    m = re.search(r'[?&]type=([^&#+]+)', url)
+    return m.group(1) if m else 'tcp'
+
+
+def _get_security_level(url: str) -> tuple:
+    """
+    Возвращает (уровень, иконка, описание):
+      'reality'  -> 🔑  Reality/XTLS — максимальная защита
+      'secure'   -> 🔒  TLS без allowInsecure
+      'insecure' -> ⚠️   allowInsecure=1 или security=none
+    """
+    sec = _get_security(url)
+    allow_insecure = bool(re.search(r'[?&]allowInsecure=1', url))
+
+    if sec == 'reality':
+        return 'reality', '\U0001f511', 'Reality/XTLS — максимальная защита'
+    if sec == 'tls' and not allow_insecure:
+        return 'secure', '\U0001f512', 'TLS — соединение защищено'
+    return 'insecure', '\u26a0\ufe0f', 'Небезопасно: нет TLS или allowInsecure=1'
+
+
+# ============================================================
+# ПРОВЕРКА PBK И SNI
+# ============================================================
+
+def _check_pbk(url: str) -> bool:
+    """Проверяет валидность pbk ключа Reality. Для не-Reality серверов всегда True."""
+    sec = _get_security(url)
+    if sec != 'reality':
+        return True
+    m = re.search(r'[?&]pbk=([^&#+]+)', url)
+    if not m:
+        return False
+    pbk = urllib.parse.unquote(m.group(1)).strip()
+    if len(pbk) != 43:
+        return False
+    if not re.fullmatch(r'[A-Za-z0-9\-_]+', pbk):
+        return False
+    return True
+
+
+_sni_cache: dict = {}
+
+def _check_sni(url: str) -> bool:
+    """Проверяет что SNI-сайт отвечает на порту 443. Результат кешируется."""
+    m = re.search(r'[?&]sni=([^&#+]+)', url)
+    if not m:
+        return True
+    sni = urllib.parse.unquote(m.group(1)).strip().lower()
+    if not sni:
+        return True
+    if sni in _sni_cache:
+        return _sni_cache[sni]
     try:
-        ip = ipaddress.ip_address(host)
-        if ip.version == 4:
-            parts = host.split('.')
-            return f"{parts[0]}.{parts[1]}.{parts[2]}"
-        return host
-    except ValueError:
-        return host
+        conn = socket.create_connection((sni, 443), timeout=SNI_CHECK_TIMEOUT)
+        conn.close()
+        _sni_cache[sni] = True
+        return True
+    except Exception:
+        _sni_cache[sni] = False
+        return False
 
+
+
+# ============================================================
+# ЦЕПОЧКА ЧЕРЕЗ РОССИЙСКИЕ СЕРВЕРЫ
+# ============================================================
+
+# Глобальное хранилище топ-российских серверов для цепочки
+_chain_servers: list = []
+_chain_ports:   list = []   # локальные SOCKS5 порты поднятых xray процессов
+_chain_procs:   list = []   # запущенные xray процессы цепочки
+
+def _start_chain_proxies(ru_results: list) -> bool:
+    """
+    Запускает xray процессы для топ-N российских серверов.
+    Каждый поднимает локальный HTTP-прокси на порту 19900+N.
+    Возвращает True если хотя бы один запустился.
+    """
+    global _chain_servers, _chain_ports, _chain_procs
+    _chain_servers = ru_results[:CHAIN_TOP_N]
+    _chain_ports   = []
+    _chain_procs   = []
+
+    base_port = 19900
+    for i, (url, *_) in enumerate(_chain_servers):
+        port = base_port + i
+        parsed = VLESS_REGEX.match(url)
+        if not parsed:
+            continue
+        cfg = _build_xray_config(parsed.groupdict(), port)
+        cfg_path = f"/tmp/chain_xray_{i}.json"
+        with open(cfg_path, 'w') as f:
+            json.dump(cfg, f)
+        try:
+            proc = subprocess.Popen(
+                [XRAY_BIN, 'run', '-c', cfg_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if _wait_for_port('127.0.0.1', port, 4.0):
+                _chain_ports.append(port)
+                _chain_procs.append(proc)
+                print(f"  Цепочка [{i+1}] запущена на порту {port}")
+            else:
+                proc.kill()
+        except Exception as e:
+            print(f"  Цепочка [{i+1}] не запустилась: {e}")
+
+    return len(_chain_ports) > 0
+
+
+def _stop_chain_proxies():
+    """Останавливает все xray процессы цепочки."""
+    for proc in _chain_procs:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    _chain_procs.clear()
+    _chain_ports.clear()
+
+
+def _test_via_chain(url: str) -> tuple | None:
+    """
+    Проверяет сервер через цепочку российских прокси.
+    Пробует каждый порт цепочки по очереди, берёт лучший результат.
+    """
+    if not _chain_ports:
+        return None
+
+    best = None
+    for port in _chain_ports:
+        # Временно подменяем TEST_URLS запросом через прокси цепочки
+        try:
+            proxies = {
+                'http':  f'http://127.0.0.1:{port}',
+                'https': f'http://127.0.0.1:{port}',
+            }
+            scores = []
+            for test_url in TEST_URLS[:2]:  # проверяем только 2 URL для скорости
+                try:
+                    t0 = time.time()
+                    r = requests.get(
+                        test_url,
+                        proxies=proxies,
+                        timeout=REQUEST_TIMEOUT,
+                        allow_redirects=True,
+                    )
+                    if r.status_code < 500:
+                        scores.append(int((time.time() - t0) * 1000))
+                except Exception:
+                    pass
+
+            if scores:
+                avg = int(statistics.mean(scores))
+                jitter = int(statistics.stdev(scores)) if len(scores) > 1 else 0
+                score = avg + jitter // 2
+                result = (url, score, avg, jitter, 0)
+                if best is None or avg < best[2]:
+                    best = result
+        except Exception:
+            pass
+
+    return best
+
+
+# ============================================================
+# ЭТАП 1: БЫСТРАЯ TCP-ПРОВЕРКА
+# ============================================================
 
 def _is_ipv6_address(host: str) -> bool:
     return ':' in host or (host.startswith('[') and host.endswith(']'))
@@ -202,12 +434,15 @@ def _extract_host_port(url: str):
     return None, None
 
 
-def tcp_alive(url: str) -> str | None:
+def tcp_alive(url: str):
     address, port = _extract_host_port(url)
     if address is None:
         return None
+
+    # Отсекаем мусорные данные, чтобы избежать UnicodeError(label too long)
     if len(address) > 253:
         return None
+
     if _is_ipv6_address(address):
         return None
     if address.startswith(BLOCKED_IPS):
@@ -218,6 +453,7 @@ def tcp_alive(url: str) -> str | None:
     try:
         with socket.create_connection((address, port), timeout=TCP_TIMEOUT):
             return url
+    # Ловим UnicodeError и ValueError, чтобы скрипт не падал из-за битых доменов
     except (OSError, UnicodeError, ValueError):
         return None
 
@@ -252,7 +488,7 @@ def _build_xray_config(data: dict, port: int) -> dict:
 
     if net == "ws":
         stream["wsSettings"] = {
-            "path": urllib.parse.unquote(q("path", "/")),
+            "path": q("path", "/"),
             "headers": {"Host": q('host', address)},
         }
     elif net == "grpc":
@@ -260,17 +496,7 @@ def _build_xray_config(data: dict, port: int) -> dict:
     elif net == "h2":
         stream["httpSettings"] = {
             "host": [q('host', address)],
-            "path": urllib.parse.unquote(q("path", "/")),
-        }
-    elif net == "splithttp":
-        stream["splithttpSettings"] = {
-            "path": urllib.parse.unquote(q("path", "/")),
-            "host": q('host', address),
-        }
-    elif net == "xhttp":
-        stream["xhttpSettings"] = {
-            "path": urllib.parse.unquote(q("path", "/")),
-            "host": q('host', address),
+            "path": q("path", "/"),
         }
 
     if sec == "reality":
@@ -283,13 +509,10 @@ def _build_xray_config(data: dict, port: int) -> dict:
         }
     elif sec == "tls":
         stream["tlsSettings"] = {
-            "serverName":      sni,
-            "fingerprint":     q("fp", "chrome"),
-            "allowInsecure":   q("allowInsecure", "0") == "1",
-            "alpn":            ["h2", "http/1.1"],
+            "serverName":  sni,
+            "fingerprint": q("fp", "chrome"),
+            "alpn":        ["h2", "http/1.1"],
         }
-
-    flow = q("flow", "")
 
     return {
         "log": {"loglevel": "none"},
@@ -302,7 +525,7 @@ def _build_xray_config(data: dict, port: int) -> dict:
                     "vnext": [{
                         "address": address,
                         "port":    server_port,
-                        "users":   [{"id": data['uuid'], "encryption": "none", "flow": flow}],
+                        "users":   [{"id": data['uuid'], "encryption": "none", "flow": q("flow")}],
                     }]
                 },
                 "streamSettings": stream,
@@ -316,7 +539,7 @@ def _build_xray_config(data: dict, port: int) -> dict:
     }
 
 
-def _build_xray_config_trojan(url: str, port: int) -> dict | None:
+def _build_xray_config_trojan(url: str, port: int):
     m = re.match(
         r'trojan://([^@]+)@([^:/?#\[\]]+|\[[^\]]+\]):(\d+)\??([^#]*)?#?(.*)?', url
     )
@@ -354,10 +577,10 @@ def _build_xray_config_trojan(url: str, port: int) -> dict | None:
         }
     elif sec == "tls":
         stream["tlsSettings"] = {
-            "serverName":    sni,
-            "fingerprint":   q("fp", "chrome"),
+            "serverName":  sni,
+            "fingerprint": q("fp", "chrome"),
             "allowInsecure": q("allowInsecure", "0") == "1",
-            "alpn":          ["h2", "http/1.1"],
+            "alpn":        ["h2", "http/1.1"],
         }
 
     return {
@@ -381,11 +604,30 @@ def _build_xray_config_trojan(url: str, port: int) -> dict | None:
     }
 
 
+def _check_google_ban(session: requests.Session) -> bool:
+    """
+    Проверяет, не забанен ли прокси Google-ом.
+    generate_204 должен вернуть 204. Редирект на sorry.google.com = капча/бан.
+    Возвращает True если всё нормально (не забанен).
+    """
+    try:
+        r = session.get(
+            "http://www.google.com/generate_204",
+            timeout=5.0,
+            allow_redirects=False,
+        )
+        if r.status_code == 204:
+            return True
+        if r.status_code in (301, 302):
+            location = r.headers.get('Location', '')
+            if 'sorry' in location or 'captcha' in location:
+                return False
+        return True
+    except Exception:
+        return True  # не смогли проверить — не штрафуем
+
+
 def test_via_xray(url: str):
-    """
-    Реальная проверка через xray для VLESS и Trojan.
-    Строгий режим: 0% потерь, пинг < MAX_PING_MS, низкий джиттер.
-    """
     port     = port_queue.get()
     cfg_file = f"cfg_{port}.json"
     proc     = None
@@ -400,7 +642,8 @@ def test_via_xray(url: str):
             if config is None:
                 return None
         else:
-            return None
+            # hysteria2 и ss — TCP прошли, даём условный пинг
+            return (url, 9999, 9999, 0, 0)
 
         with open(cfg_file, "w") as f:
             json.dump(config, f)
@@ -421,6 +664,10 @@ def test_via_xray(url: str):
         session           = requests.Session()
         session.trust_env = False
         session.proxies   = proxies
+
+        # --- Проверка на Google-бан ---
+        if not _check_google_ban(session):
+            return None
 
         pings  = []
         losses = 0
@@ -443,10 +690,7 @@ def test_via_xray(url: str):
 
         if not pings:
             return None
-
-        # СТРОГО: нулевые потери
-        loss_rate = losses / PING_ROUNDS
-        if loss_rate > MAX_LOSS_RATE:
+        if losses / PING_ROUNDS > MAX_LOSS_RATE:
             return None
 
         avg_ping = int(statistics.mean(pings))
@@ -454,15 +698,7 @@ def test_via_xray(url: str):
             return None
 
         jitter = int(statistics.stdev(pings)) if len(pings) > 1 else 0
-
-        # Фильтр нестабильных серверов по джиттеру
-        if jitter > avg_ping * 0.8:
-            return None
-
-        is_reality = _is_reality(url)
-        score = avg_ping + jitter // 2
-        if is_reality:
-            score = max(0, score + REALITY_BONUS_SCORE)
+        score  = avg_ping + jitter // 2
 
         return (url, score, avg_ping, jitter, losses)
 
@@ -472,7 +708,7 @@ def test_via_xray(url: str):
         if proc:
             try:
                 proc.terminate()
-                proc.wait(timeout=2.0)
+                proc.wait(timeout=1.5)
             except Exception:
                 try: proc.kill()
                 except Exception: pass
@@ -515,7 +751,7 @@ def _decode_subscription(text: str) -> str:
     return '\n'.join(lines_decoded) if lines_decoded else stripped
 
 
-def _fetch_with_retry(url: str, retries: int = 3, delay: float = 2.0) -> str | None:
+def _fetch_with_retry(url: str, retries: int = 3, delay: float = 2.0):
     headers = {'User-Agent': 'Mozilla/5.0'}
     for attempt in range(1, retries + 1):
         try:
@@ -527,38 +763,28 @@ def _fetch_with_retry(url: str, retries: int = 3, delay: float = 2.0) -> str | N
                 print(f"  [RETRY {attempt}/{retries}] {url}: {e}")
                 time.sleep(delay)
             else:
-                print(f"  [WARN] Не удалось загрузить: {url}: {e}")
+                print(f"  [WARN] Не удалось загрузить после {retries} попыток: {url}: {e}")
     return None
 
 
-def fetch_configs() -> tuple:
-    """
-    Возвращает (all_configs, reality_configs, other_configs, ru_keys).
-    reality_configs — отдельный список для приоритетной обработки.
-    """
-    all_raw: list = []
-    ru_keys: set  = set()
+def fetch_configs():
+    """Возвращает (список уникальных конфигов, множество host:port российских серверов)."""
+    all_raw = []
+    ru_keys = set()
 
     for source_url in SOURCES:
-        is_ru_source = source_url in RU_SOURCES
         raw_text = _fetch_with_retry(source_url)
         if raw_text is None:
             continue
         text  = _decode_subscription(raw_text)
         found = PROTO_REGEX.findall(text)
-        fmt   = "base64" if text is not raw_text else "plain"
-        tag   = "[RU]" if is_ru_source else "[INT]"
-        print(f"  {tag} {source_url.split('/')[-1]}  =>  {len(found)} конфигов  [{fmt}]")
+        fmt   = "plain" if text is raw_text else "base64"
+        print(f"  [OK] {source_url}  ->  {len(found)} конфигов  [{fmt}]")
         all_raw.extend(found)
 
-        if is_ru_source:
-            for cfg in found:
-                host, port = _extract_host_port(cfg)
-                if host and port:
-                    ru_keys.add(f"{host}:{port}")
-
-    seen_endpoints: set = set()
-    unique: list = []
+    # Дедупликация по хосту:порту
+    seen_endpoints = set()
+    unique = []
     for cfg in all_raw:
         host, port = _extract_host_port(cfg)
         if host and port:
@@ -566,68 +792,24 @@ def fetch_configs() -> tuple:
             if key not in seen_endpoints:
                 seen_endpoints.add(key)
                 unique.append(cfg)
+                if _is_russian_server(host, cfg):
+                    ru_keys.add(key)
         else:
             unique.append(cfg)
 
-    reality_configs = [u for u in unique if _is_reality(u)]
-    other_configs   = [u for u in unique if not _is_reality(u)]
-
-    print(f"      Из них Reality: {len(reality_configs)} / Остальные: {len(other_configs)}")
-
-    return unique, reality_configs, other_configs, ru_keys
-
-
-def _deduplicate_by_subnet(results: list, max_per_subnet: int = MAX_PER_SUBNET_24) -> list:
-    """
-    Убирает дубликаты по /24 подсети: не более max_per_subnet серверов
-    из одной подсети. Предотвращает доминирование одного хостера в топе.
-    """
-    subnet_count: dict = {}
-    deduped = []
-    for entry in results:
-        host, _ = _extract_host_port(entry[0])
-        if not host:
-            deduped.append(entry)
-            continue
-        subnet = _get_subnet_24(host)
-        count  = subnet_count.get(subnet, 0)
-        if count < max_per_subnet:
-            subnet_count[subnet] = count + 1
-            deduped.append(entry)
-    return deduped
+    return unique, ru_keys
 
 
 # ============================================================
 # ГЕНЕРАЦИЯ HTML
 # ============================================================
 
-def _get_proto(url: str) -> str:
-    for p in ('vless', 'trojan', 'hysteria2', 'ss'):
-        if url.startswith(p + '://'):
-            return p.upper()
-    return 'UNKNOWN'
-
-
-def _get_security(url: str) -> str:
-    m = re.search(r'[?&]security=([^&#+]+)', url)
-    if m:
-        return m.group(1)
-    if 'trojan://' in url:
-        return 'tls'
-    return 'none'
-
-
-def _get_network(url: str) -> str:
-    m = re.search(r'[?&]type=([^&#+]+)', url)
-    return m.group(1) if m else 'tcp'
-
-
 def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> str:
 
     def ping_color(avg):
-        if avg < 300:  return '#22c55e'
-        if avg < 1000: return '#f59e0b'
-        return '#ef4444'
+        if avg < 300:   return '#06d6a0'
+        if avg < 1000:  return '#ffd166'
+        return '#ef476f'
 
     def make_rows(results):
         rows = []
@@ -636,41 +818,37 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
             security = _get_security(url)
             network  = _get_network(url)
             host, _  = _extract_host_port(url)
-            tag      = urllib.parse.unquote(url.split('#')[-1])[:36] if '#' in url else (host or '')[:36]
-            is_ru    = _is_russian_server(host or '')
+            tag      = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else (host or '')[:40]
+            is_ru    = _is_russian_server(host or '', url)
             flag     = '\U0001f1f7\U0001f1fa' if is_ru else '\U0001f30d'
             loss_pct = int(losses / PING_ROUNDS * 100)
             pc       = ping_color(avg)
             safe_url = url.replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;').replace("'", '&#39;')
             safe_tag = tag.replace('<', '&lt;').replace('>', '&gt;')
-            reality_mark = ' ⚡' if security == 'reality' else ''
 
-            proto_colors = {
-                'VLESS':     ('rgba(99,102,241,0.15)', '#a5b4fc', 'rgba(99,102,241,0.35)'),
-                'TROJAN':    ('rgba(234,179,8,0.12)',  '#fde047', 'rgba(234,179,8,0.35)'),
-                'SS':        ('rgba(34,197,94,0.12)',  '#86efac', 'rgba(34,197,94,0.3)'),
-                'HYSTERIA2': ('rgba(236,72,153,0.12)', '#f9a8d4', 'rgba(236,72,153,0.3)'),
-            }
-            pbg, ptxt, pborder = proto_colors.get(proto, ('rgba(148,163,184,0.1)', '#94a3b8', 'rgba(148,163,184,0.25)'))
-
-            sec_colors = {
-                'reality': ('rgba(168,85,247,0.18)', '#c084fc', 'rgba(168,85,247,0.5)'),
-                'tls':     ('rgba(34,197,94,0.1)',   '#86efac', 'rgba(34,197,94,0.25)'),
-                'none':    ('rgba(148,163,184,0.08)','#64748b',  'rgba(148,163,184,0.2)'),
-            }
-            sbg, stxt, sborder = sec_colors.get(security, ('rgba(148,163,184,0.08)', '#64748b', 'rgba(148,163,184,0.2)'))
+            # Определяем уровень безопасности
+            sec_level, sec_icon, sec_tooltip = _get_security_level(url)
+            if sec_level == 'reality':
+                sec_color = '#a78bfa'
+            elif sec_level == 'secure':
+                sec_color = '#06d6a0'
+            else:
+                sec_color = '#ef476f'
 
             rows.append(
-                f'<tr class="srv-row" data-ping="{avg}" data-proto="{proto}" data-loss="{loss_pct}" data-sec="{security}">' +
-                f'<td class="td-num">{i}</td>' +
-                f'<td class="td-name"><span class="srv-flag">{flag}</span><span class="srv-tag" title="{safe_tag}">{safe_tag}{reality_mark}</span></td>' +
-                f'<td class="td-badge"><span class="badge" style="background:{pbg};color:{ptxt};border-color:{pborder}">{proto}</span></td>' +
-                f'<td class="td-badge td-hide"><span class="badge badge-sm" style="background:rgba(148,163,184,0.08);color:#94a3b8;border-color:rgba(148,163,184,0.2)">{network}</span></td>' +
-                f'<td class="td-badge td-hide"><span class="badge badge-sm" style="background:{sbg};color:{stxt};border-color:{sborder}">{security}</span></td>' +
-                f'<td class="td-ping"><span class="ping-val" style="color:{pc}">{avg}</span><span class="ping-unit">ms</span></td>' +
-                f'<td class="td-jitter td-hide" style="color:#64748b;font-family:monospace;font-size:11px">{jitter}ms</td>' +
-                f'<td class="td-loss"><span class="loss-dot" style="background:{"#22c55e" if loss_pct==0 else "#ef4444"}"></span><span style="color:{"#22c55e" if loss_pct==0 else "#ef4444"};font-size:12px">{loss_pct}%</span></td>' +
-                f'<td class="td-copy"><button class="copy-btn" onclick="copyVpn(this)" data-url="{safe_url}" title="Copy config"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2v1"/></svg></button></td>' +
+                f'<tr style="border-bottom:1px solid #1e2230">'
+                f'<td style="padding:9px 10px;color:#4a5568;width:36px">{i}</td>'
+                f'<td style="padding:9px 10px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{flag} {safe_tag}</td>'
+                f'<td style="padding:9px 10px"><span style="background:#0d2b33;color:#00e5ff;border:1px solid #005f6b;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700">{proto}</span></td>'
+                f'<td style="padding:9px 10px"><span style="background:#1a1f2e;color:#9aa0b4;border:1px solid #2a3040;border-radius:4px;padding:2px 7px;font-size:11px">{network}</span></td>'
+                f'<td style="padding:9px 10px"><span style="background:#1a1f2e;color:#9aa0b4;border:1px solid #2a3040;border-radius:4px;padding:2px 7px;font-size:11px">{security}</span></td>'
+                f'<td style="padding:9px 10px;text-align:center">'
+                f'<span title="{sec_tooltip}" style="font-size:15px;cursor:help;color:{sec_color}">{sec_icon}</span>'
+                f'</td>'
+                f'<td style="padding:9px 10px;color:{pc};font-weight:700">{avg}ms</td>'
+                f'<td style="padding:9px 10px;color:#718096">{jitter}ms</td>'
+                f'<td style="padding:9px 10px;color:{"#06d6a0" if loss_pct==0 else "#ef476f"}">{loss_pct}%</td>'
+                f'<td style="padding:9px 10px"><button onclick="copyVpn(this)" data-url="{safe_url}" style="background:#0d2b33;border:1px solid #005f6b;color:#00e5ff;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:13px">Copy</button></td>'
                 f'</tr>'
             )
         return '\n'.join(rows)
@@ -678,10 +856,8 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
     intl_rows = make_rows(intl_results)
     ru_rows   = make_rows(ru_results)
     total     = len(intl_results) + len(ru_results)
-    updated   = time.strftime('%d %b %Y · %H:%M UTC', time.gmtime())
+    updated   = time.strftime('%d.%m.%Y %H:%M UTC', time.gmtime())
     best_ping = min((r[2] for r in intl_results), default=0)
-    reality_count = sum(1 for r in (intl_results + ru_results) if _is_reality(r[0]))
-    reality_pct   = int(reality_count / total * 100) if total else 0
 
     return f"""<!DOCTYPE html>
 <html lang="ru">
@@ -689,176 +865,120 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VPN Scout</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
-:root{{
-  --bg0:#070b14;--bg1:#0d1117;--bg2:#111827;--bg3:#1a2233;
-  --border:#1e2d3d;--border2:#253347;
-  --text:#e2e8f0;--text2:#94a3b8;--text3:#475569;
-  --accent:#3b82f6;--accent2:#60a5fa;
-  --green:#22c55e;--yellow:#f59e0b;--red:#ef4444;
-  --reality:#a855f7;
-  --radius:8px;--radius-lg:12px;
+body {{ margin:0; padding:0; background:#0a0c10; color:#e2e8f0; font-family:Arial,sans-serif; font-size:13px; }}
+h1 {{ margin:0; padding:20px 20px 0; font-size:24px; color:#fff; }}
+.info {{ padding:8px 20px 16px; color:#718096; font-size:12px; }}
+.info b {{ color:#00e5ff; }}
+.legend {{ padding:0 20px 10px; font-size:11px; color:#718096; display:flex; gap:16px; flex-wrap:wrap; }}
+.legend span {{ display:flex; align-items:center; gap:4px; }}
+.stats-row {{ display:table; width:100%; border-collapse:separate; border-spacing:10px; padding:0 10px 10px; box-sizing:border-box; }}
+.stat {{ display:table-cell; background:#111318; border:1px solid #1e2230; border-radius:8px; padding:14px 18px; text-align:center; }}
+.stat-num {{ font-size:26px; font-weight:700; color:#fff; }}
+.stat-lbl {{ font-size:11px; color:#718096; margin-top:4px; }}
+.tab-bar {{ padding:10px 20px; }}
+.tab-btn {{
+  display:inline-block;
+  padding:10px 30px;
+  margin-right:8px;
+  border-radius:8px;
+  border:2px solid #1e2230;
+  background:#111318;
+  color:#e2e8f0;
+  font-size:14px;
+  font-weight:700;
+  cursor:pointer;
+  text-decoration:none;
 }}
-body{{background:var(--bg0);color:var(--text);font-family:'Inter',sans-serif;font-size:13px;min-height:100vh;line-height:1.5}}
-.header{{background:var(--bg1);border-bottom:1px solid var(--border);padding:0 24px;display:flex;align-items:center;justify-content:space-between;height:56px;position:sticky;top:0;z-index:100}}
-.logo{{display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px}}
-.logo-icon{{width:28px;height:28px;background:linear-gradient(135deg,#3b82f6,#8b5cf6);border-radius:7px;display:flex;align-items:center;justify-content:center}}
-.header-meta{{font-size:11px;color:var(--text3);font-family:'JetBrains Mono',monospace}}
-.stats-bar{{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--border);border-bottom:1px solid var(--border)}}
-.stat{{background:var(--bg1);padding:16px 20px;text-align:center}}
-.stat-val{{font-size:22px;font-weight:600;font-family:'JetBrains Mono',monospace;line-height:1}}
-.stat-lbl{{font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-top:5px}}
-.content{{padding:20px 20px 40px;max-width:1200px;margin:0 auto}}
-.tabs{{display:flex;gap:6px;margin-bottom:16px;align-items:center}}
-.tab-btn{{padding:7px 18px;border-radius:var(--radius);border:1px solid var(--border2);background:transparent;color:var(--text2);font-size:13px;font-weight:500;cursor:pointer;font-family:'Inter',sans-serif;transition:all .15s}}
-.tab-btn:hover{{background:var(--bg3);color:var(--text)}}
-.tab-btn.active{{background:var(--bg3);border-color:var(--accent);color:var(--accent2)}}
-.tab-btn.active-ru{{border-color:#f97316;color:#fb923c;background:var(--bg3)}}
-.filter-group{{margin-left:auto;display:flex;gap:6px}}
-.filter-select{{background:var(--bg2);border:1px solid var(--border2);color:var(--text2);border-radius:var(--radius);padding:6px 10px;font-size:12px;font-family:'Inter',sans-serif;cursor:pointer;outline:none}}
-.table-card{{background:var(--bg1);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden}}
-.tbl-wrap{{overflow-x:auto}}
-table{{width:100%;border-collapse:collapse}}
-thead th{{background:var(--bg0);color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:.07em;padding:10px 14px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap;font-weight:500}}
-.srv-row{{border-bottom:1px solid var(--border);transition:background .1s}}
-.srv-row:last-child{{border-bottom:none}}
-.srv-row:hover{{background:var(--bg2)}}
-.srv-row[data-sec="reality"]{{border-left:2px solid rgba(168,85,247,0.4)}}
-.td-num{{padding:10px 14px;color:var(--text3);font-size:11px;width:36px;font-family:monospace}}
-.td-name{{padding:10px 14px;max-width:200px}}
-.srv-flag{{font-size:13px;margin-right:6px}}
-.srv-tag{{font-size:12px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;max-width:180px;vertical-align:bottom}}
-.td-badge{{padding:10px 14px}}
-.badge{{display:inline-flex;align-items:center;padding:2px 8px;border-radius:5px;font-size:10px;font-weight:600;letter-spacing:.04em;border:1px solid;font-family:monospace}}
-.badge-sm{{font-weight:400}}
-.td-ping{{padding:10px 14px;white-space:nowrap}}
-.ping-val{{font-size:14px;font-weight:600;font-family:monospace}}
-.ping-unit{{font-size:10px;color:var(--text3);margin-left:1px}}
-.td-jitter{{padding:10px 14px}}
-.td-loss{{padding:10px 14px;display:flex;align-items:center;gap:5px}}
-.loss-dot{{width:6px;height:6px;border-radius:50%;flex-shrink:0}}
-.td-copy{{padding:10px 14px}}
-.copy-btn{{background:var(--bg3);border:1px solid var(--border2);color:var(--text2);border-radius:6px;padding:5px 8px;cursor:pointer;display:flex;align-items:center;transition:all .15s}}
-.copy-btn:hover{{background:rgba(59,130,246,0.15);border-color:var(--accent);color:var(--accent2)}}
-.copy-btn.ok{{background:rgba(34,197,94,0.15);border-color:#22c55e;color:#22c55e}}
-.empty{{padding:40px;text-align:center;color:var(--text3)}}
-.sub-banner{{background:rgba(59,130,246,0.07);border:1px solid rgba(59,130,246,0.18);border-radius:var(--radius);padding:11px 16px;margin-bottom:16px;font-size:12px;color:var(--text2);display:flex;align-items:center;gap:8px;flex-wrap:wrap}}
-.sub-banner code{{font-family:'JetBrains Mono',monospace;color:var(--accent2);font-size:11px;background:rgba(59,130,246,0.1);padding:2px 6px;border-radius:4px}}
-#toast{{position:fixed;bottom:20px;right:20px;background:#22c55e;color:#052e16;font-weight:600;font-size:12px;padding:9px 16px;border-radius:var(--radius);opacity:0;transform:translateY(6px);transition:all .2s;pointer-events:none;z-index:999}}
-#toast.show{{opacity:1;transform:translateY(0)}}
-@media(max-width:680px){{.td-hide{{display:none}}.stats-bar{{grid-template-columns:repeat(3,1fr)}}.content{{padding:12px}}.filter-group{{display:none}}}}
+.tab-btn.active-intl {{ background:#00e5ff; color:#000; border-color:#00e5ff; }}
+.tab-btn.active-ru  {{ background:#ff6b35; color:#fff; border-color:#ff6b35; }}
+.tab-btn:hover {{ border-color:#718096; }}
+.section {{ display:none; padding:0 20px 40px; }}
+.section.visible {{ display:block; }}
+.tbl-wrap {{ overflow-x:auto; border:1px solid #1e2230; border-radius:8px; }}
+table {{ width:100%; border-collapse:collapse; background:#111318; }}
+thead th {{ background:#0d1017; color:#718096; font-size:10px; text-transform:uppercase; padding:11px 12px; text-align:left; border-bottom:1px solid #1e2230; white-space:nowrap; }}
+tbody tr:hover {{ background:#161b26; }}
+#toast {{ position:fixed; bottom:24px; right:24px; background:#06d6a0; color:#000; font-weight:700; font-size:13px; padding:10px 20px; border-radius:8px; opacity:0; transition:opacity .3s; pointer-events:none; z-index:999; }}
+#toast.show {{ opacity:1; }}
 </style>
 </head>
 <body>
-<header class="header">
-  <div class="logo">
-    <div class="logo-icon">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-    </div>
-    VPN Scout
-  </div>
-  <div class="header-meta">Updated {updated} &nbsp;·&nbsp; Scan: {elapsed}s</div>
-</header>
-<div class="stats-bar">
-  <div class="stat"><div class="stat-val" style="color:var(--accent2)">{len(intl_results)}</div><div class="stat-lbl">International</div></div>
-  <div class="stat"><div class="stat-val" style="color:#fb923c">{len(ru_results)}</div><div class="stat-lbl">Russian</div></div>
-  <div class="stat"><div class="stat-val">{total}</div><div class="stat-lbl">Total alive</div></div>
-  <div class="stat"><div class="stat-val" style="color:var(--green)">{best_ping}ms</div><div class="stat-lbl">Best ping</div></div>
-  <div class="stat"><div class="stat-val" style="color:var(--reality)">⚡{reality_count} ({reality_pct}%)</div><div class="stat-lbl">Reality</div></div>
+
+<h1>VPN Scout</h1>
+<div class="info">Обновлено: <b>{updated}</b> &nbsp;|&nbsp; Время проверки: <b>{elapsed}с</b></div>
+
+<div class="legend">
+  <span><span style="color:#a78bfa;font-size:14px">🔑</span> Reality/XTLS — максимальная защита</span>
+  <span><span style="color:#06d6a0;font-size:14px">🔒</span> TLS — соединение защищено</span>
+  <span><span style="color:#ef476f;font-size:14px">⚠️</span> Небезопасно (нет TLS или allowInsecure=1)</span>
 </div>
-<div class="content">
-<div class="sub-banner">
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
-  Подписка: <code>https://gist.githubusercontent.com/YOUR_USER/YOUR_GIST_ID/raw/sub.txt</code>
-  &nbsp;·&nbsp; ⚡ = Reality (приоритет). Нажми Copy для прямого копирования конфига.
+
+<div class="stats-row">
+  <div class="stat"><div class="stat-num" style="color:#00e5ff">{len(intl_results)}</div><div class="stat-lbl">🌍 Зарубежных</div></div>
+  <div class="stat"><div class="stat-num" style="color:#ff6b35">{len(ru_results)}</div><div class="stat-lbl">🇷🇺 Российских</div></div>
+  <div class="stat"><div class="stat-num">{total}</div><div class="stat-lbl">Всего живых</div></div>
+  <div class="stat"><div class="stat-num" style="color:#06d6a0">{best_ping}ms</div><div class="stat-lbl">Лучший пинг</div></div>
 </div>
-<div class="tabs">
-  <button class="tab-btn active" id="btn-intl" onclick="showTab('intl')">
-    🌍 International <span style="background:rgba(59,130,246,0.15);color:var(--accent2);border-radius:20px;padding:1px 7px;font-size:11px;margin-left:4px">{len(intl_results)}</span>
-  </button>
-  <button class="tab-btn" id="btn-ru" onclick="showTab('ru')">
-    🇷🇺 Russian <span style="background:rgba(249,115,22,0.12);color:#fb923c;border-radius:20px;padding:1px 7px;font-size:11px;margin-left:4px">{len(ru_results)}</span>
-  </button>
-  <div class="filter-group">
-    <select class="filter-select" id="proto-filter" onchange="applyFilters()">
-      <option value="">All protocols</option>
-      <option value="VLESS">VLESS</option>
-      <option value="TROJAN">TROJAN</option>
-    </select>
-    <select class="filter-select" id="sec-filter" onchange="applyFilters()">
-      <option value="">All security</option>
-      <option value="reality">⚡ Reality</option>
-      <option value="tls">TLS</option>
-      <option value="none">None</option>
-    </select>
-    <select class="filter-select" id="sort-select" onchange="applyFilters()">
-      <option value="ping">Sort: Ping ↑</option>
-      <option value="loss">Sort: Loss ↑</option>
-    </select>
+
+<div class="tab-bar">
+  <button class="tab-btn active-intl" id="btn-intl" onclick="showTab('intl')">🌍 Зарубежные ({len(intl_results)})</button>
+  <button class="tab-btn" id="btn-ru" onclick="showTab('ru')">🇷🇺 Российские ({len(ru_results)})</button>
+</div>
+
+<div class="section visible" id="sec-intl">
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Сервер</th><th>Протокол</th><th>Транспорт</th><th>Безопасность</th><th>🔒</th><th>Пинг</th><th>Jitter</th><th>Loss</th><th></th></tr></thead>
+      <tbody>
+        {intl_rows if intl_rows else '<tr><td colspan="10" style="text-align:center;padding:30px;color:#718096">Нет серверов</td></tr>'}
+      </tbody>
+    </table>
   </div>
 </div>
-<div class="table-card" id="sec-intl">
-  <div class="tbl-wrap"><table>
-    <thead><tr><th>#</th><th>Server</th><th>Protocol</th><th class="td-hide">Network</th><th class="td-hide">Security</th><th>Ping</th><th class="td-hide">Jitter</th><th>Loss</th><th></th></tr></thead>
-    <tbody id="body-intl">{intl_rows if intl_rows else '<tr><td colspan="9"><div class="empty">No servers</div></td></tr>'}</tbody>
-  </table></div>
+
+<div class="section" id="sec-ru">
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Сервер</th><th>Протокол</th><th>Транспорт</th><th>Безопасность</th><th>🔒</th><th>Пинг</th><th>Jitter</th><th>Loss</th><th></th></tr></thead>
+      <tbody>
+        {ru_rows if ru_rows else '<tr><td colspan="10" style="text-align:center;padding:30px;color:#718096">Нет серверов</td></tr>'}
+      </tbody>
+    </table>
+  </div>
 </div>
-<div class="table-card" id="sec-ru" style="display:none">
-  <div class="tbl-wrap"><table>
-    <thead><tr><th>#</th><th>Server</th><th>Protocol</th><th class="td-hide">Network</th><th class="td-hide">Security</th><th>Ping</th><th class="td-hide">Jitter</th><th>Loss</th><th></th></tr></thead>
-    <tbody id="body-ru">{ru_rows if ru_rows else '<tr><td colspan="9"><div class="empty">No servers</div></td></tr>'}</tbody>
-  </table></div>
-</div>
-</div>
-<div id="toast">Copied!</div>
+
+<div id="toast">Скопировано!</div>
+
 <script>
-var activeTab='intl';
-function showTab(name){{
-  activeTab=name;
-  document.getElementById('sec-intl').style.display=name==='intl'?'':'none';
-  document.getElementById('sec-ru').style.display=name==='ru'?'':'none';
-  document.getElementById('btn-intl').className='tab-btn'+(name==='intl'?' active':'');
-  document.getElementById('btn-ru').className='tab-btn'+(name==='ru'?' active-ru':'');
-  applyFilters();
+function showTab(name) {{
+  document.getElementById('sec-intl').className = 'section' + (name === 'intl' ? ' visible' : '');
+  document.getElementById('sec-ru').className   = 'section' + (name === 'ru'   ? ' visible' : '');
+  document.getElementById('btn-intl').className = 'tab-btn' + (name === 'intl' ? ' active-intl' : '');
+  document.getElementById('btn-ru').className   = 'tab-btn' + (name === 'ru'   ? ' active-ru'   : '');
 }}
-function applyFilters(){{
-  var proto=document.getElementById('proto-filter').value;
-  var sec=document.getElementById('sec-filter').value;
-  var sort=document.getElementById('sort-select').value;
-  var bodyId=activeTab==='intl'?'body-intl':'body-ru';
-  var body=document.getElementById(bodyId);
-  var rows=Array.from(body.querySelectorAll('.srv-row'));
-  rows.forEach(function(r){{
-    var protoOk=!proto||r.getAttribute('data-proto')===proto;
-    var secOk=!sec||r.getAttribute('data-sec')===sec;
-    r.style.display=(protoOk&&secOk)?'':'none';
-  }});
-  var vis=rows.filter(function(r){{return r.style.display!=='none';}});
-  vis.sort(function(a,b){{
-    var k=sort==='loss'?'data-loss':'data-ping';
-    return parseInt(a.getAttribute(k))-parseInt(b.getAttribute(k));
-  }});
-  vis.forEach(function(r,i){{body.appendChild(r);r.querySelector('.td-num').textContent=i+1;}});
-}}
-function copyVpn(btn){{
-  var url=btn.getAttribute('data-url');
-  var ta=document.createElement('textarea');
-  ta.value=url;ta.style.cssText='position:fixed;left:-9999px;opacity:0';
-  document.body.appendChild(ta);ta.select();
-  try{{
+function copyVpn(btn) {{
+  var url = btn.getAttribute('data-url');
+  var ta = document.createElement('textarea');
+  ta.value = url;
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try {{
     document.execCommand('copy');
-    btn.classList.add('ok');
-    btn.innerHTML='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
-    var t=document.getElementById('toast');t.className='show';
-    setTimeout(function(){{
-      btn.classList.remove('ok');
-      btn.innerHTML='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2v1"/></svg>';
-      t.className='';
-    }},1600);
-  }}catch(e){{alert('Copy failed');}}
+    btn.textContent = 'OK!';
+    btn.style.color = '#06d6a0';
+    btn.style.borderColor = '#06d6a0';
+    var t = document.getElementById('toast');
+    t.className = 'show';
+    setTimeout(function() {{
+      btn.textContent = 'Copy';
+      btn.style.color = '#00e5ff';
+      btn.style.borderColor = '#005f6b';
+      t.className = '';
+    }}, 1500);
+  }} catch(e) {{ alert('Не удалось скопировать'); }}
   document.body.removeChild(ta);
 }}
 </script>
@@ -866,88 +986,63 @@ function copyVpn(btn){{
 </html>"""
 
 
+# ============================================================
+# ГЛАВНЫЙ ЗАПУСК
+# ============================================================
+
 def run():
     t_start = time.time()
     print("=" * 60)
-    print("  VPN SCOUT — УЛУЧШЕННАЯ ВЕРСИЯ v2")
-    print(f"  TCP-воркеры    : {TCP_WORKERS}  (таймаут {TCP_TIMEOUT}с)")
-    print(f"  Xray-воркеры   : {XRAY_WORKERS}  (таймаут {XRAY_START_TIMEOUT}с)")
-    print(f"  Раундов        : {PING_ROUNDS},  макс. пинг: {MAX_PING_MS}мс")
-    print(f"  Макс. потерь   : {int(MAX_LOSS_RATE*100)}%  (строгий режим)")
-    print(f"  Топ каждой гео : {TOP_N_EACH}")
-    print(f"  Reality-only топ: {'ВКЛ' if REALITY_ONLY_TOP else 'ВЫКЛ'}")
-    print(f"  Дедуп /24 сеть : макс {MAX_PER_SUBNET_24} сервера с подсети")
+    print("  ЗАПУСК ПРОВЕРКИ VPN-СЕРВЕРОВ  (2-этапный)")
+    print(f"  TCP-воркеры   : {TCP_WORKERS}  (таймаут {TCP_TIMEOUT}с)")
+    print(f"  Xray-воркеры  : {XRAY_WORKERS}  (таймаут {XRAY_START_TIMEOUT}с)")
+    print(f"  Раундов       : {PING_ROUNDS},  макс. пинг: {MAX_PING_MS}мс")
+    print(f"  Топ каждой гео: {TOP_N_EACH}")
     print(f"  Динамический таймаут (MY_SLOW_NET): {'ВКЛ' if _slow else 'ВЫКЛ'}")
-    print(f"  Reality-приоритет: ВКЛ (бонус {REALITY_BONUS_SCORE}мс к score)")
-    print(f"  Base64-подписка : {SUB_FILE}")
-    print(f"  Источников: {len(RU_SOURCES)} RU + {len(INT_SOURCES)} INT = {len(SOURCES)} всего")
+    print(f"  Google-бан фильтр: ВКЛ")
+    print(f"  Base64-подписка: {SUB_FILE}")
+    print(f"  Фильтр ⚠️  небезопасные  : {'ВКЛ' if FILTER_INSECURE else 'ВЫКЛ'}")
+    print(f"  Фильтр 🔒  TLS-only      : {'ВКЛ' if FILTER_LOCK     else 'ВЫКЛ'}")
+    print(f"  Фильтр 🇷🇺  российские   : {'ВКЛ' if FILTER_RUSSIAN  else 'ВЫКЛ'}")
     print("=" * 60)
 
     # --- [1/4] Сбор ---
     print("\n[1/4] Сбор конфигов...")
-    all_configs, reality_configs, other_configs, ru_source_keys = fetch_configs()
+    all_configs, ru_source_keys = fetch_configs()
     print(f"      Итого уникальных (по хосту:порту): {len(all_configs)}")
     if not all_configs:
         print("Нет кандидатов.")
         return
 
     # --- [2/4] TCP ---
-    # Стратегия: сначала TCP-проверяем Reality, потом остальные
     print(f"\n[2/4] Быстрая TCP-проверка ({TCP_WORKERS} воркеров)...")
-    print(f"      Сначала Reality ({len(reality_configs)} шт.), потом остальные ({len(other_configs)} шт.)...")
-
-    alive_reality = []
-    alive_other   = []
-
+    alive = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=TCP_WORKERS) as ex:
         for future in concurrent.futures.as_completed(
-            {ex.submit(tcp_alive, u): u for u in reality_configs}
+            {ex.submit(tcp_alive, u): u for u in all_configs}
         ):
             result = future.result()
             if result:
-                alive_reality.append(result)
-
-    print(f"      Reality TCP живых: {len(alive_reality)} / {len(reality_configs)}")
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=TCP_WORKERS) as ex:
-        for future in concurrent.futures.as_completed(
-            {ex.submit(tcp_alive, u): u for u in other_configs}
-        ):
-            result = future.result()
-            if result:
-                alive_other.append(result)
+                alive.append(result)
 
     elapsed_tcp = int(time.time() - t_start)
-    total_alive = len(alive_reality) + len(alive_other)
-    print(f"      Прочих TCP живых: {len(alive_other)} / {len(other_configs)}")
-    print(f"      Итого TCP живых: {total_alive} / {len(all_configs)}  ({elapsed_tcp}с)")
-
-    if not total_alive:
+    print(f"      TCP живых: {len(alive)} / {len(all_configs)}  ({elapsed_tcp}с)")
+    if not alive:
         print("Нет живых серверов после TCP-проверки.")
         return
 
     # --- [3/4] Xray ---
-    # Reality идут ПЕРВЫМИ и получают весь лимит
-    reality_xray_limit = min(len(alive_reality), MAX_XRAY_TOTAL)
-    other_xray_limit   = min(len(alive_other), MAX_XRAY_TOTAL - reality_xray_limit)
-
-    to_check = alive_reality[:reality_xray_limit] + alive_other[:other_xray_limit]
-    print(f"\n[3/4] Глубокая xray-проверка ({len(to_check)} серверов, {XRAY_WORKERS} воркеров)...")
-    print(f"      Reality в очереди: {reality_xray_limit} шт. | Прочих: {other_xray_limit} шт.")
-    print(f"      Фильтры: макс пинг {MAX_PING_MS}мс, потери {int(MAX_LOSS_RATE*100)}%, раундов {PING_ROUNDS}")
-
+    print(f"\n[3/4] Глубокая xray-проверка {len(alive)} серверов ({XRAY_WORKERS} воркеров)...")
     results = []
     tested  = 0
-    total   = len(to_check)
+    total   = len(alive)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=XRAY_WORKERS) as ex:
-        futures = {ex.submit(test_via_xray, u): u for u in to_check}
+        futures = {ex.submit(test_via_xray, u): u for u in alive}
         for future in concurrent.futures.as_completed(futures):
             tested += 1
-            if tested % 100 == 0 or tested == total:
-                reality_ok = sum(1 for r in results if _is_reality(r[0]))
-                other_ok   = len(results) - reality_ok
-                print(f"  Прогресс: {tested}/{total}  |  Прошли: {len(results)}  |  Reality: {reality_ok}  |  Прочих: {other_ok}")
+            if tested % 10 == 0 or tested == total:
+                print(f"  Прогресс: {tested}/{total}  |  Прошли xray: {len(results)}")
             res = future.result()
             if res:
                 results.append(res)
@@ -960,8 +1055,98 @@ def run():
         print("Нет рабочих серверов. Старый файл сохранён.")
         return
 
+    # Сортируем все результаты по score (avg + jitter/2)
     results.sort(key=lambda x: x[1])
 
+    # --- Цепочка через российские серверы ---
+    # ВАЖНО: цепочка работает ДО фильтров — российские серверы нужны как инструмент,
+    # но в финальный список они не попадут — их уберёт FILTER_RUSSIAN ниже.
+    if CHAIN_PROXY:
+        # Выделяем российские серверы из ВСЕХ результатов xray (до любых фильтров)
+        ru_for_chain   = []
+        intl_for_chain = []
+        for entry in results:
+            h, _ = _extract_host_port(entry[0])
+            if _is_russian_server(h or '', entry[0]):
+                ru_for_chain.append(entry)
+            else:
+                intl_for_chain.append(entry)
+
+        if ru_for_chain:
+            print(f"\n[ЦЕПОЧКА] Найдено российских серверов для цепочки: {len(ru_for_chain)}")
+            print(f"  Запускаем топ-{CHAIN_TOP_N} как прокси...")
+            started = _start_chain_proxies(ru_for_chain)
+
+            if started:
+                print(f"  Перепроверяем {len(intl_for_chain)} зарубежных через российскую цепочку...")
+                chain_results = []
+                with concurrent.futures.ThreadPoolExecutor(max_workers=XRAY_WORKERS) as ex:
+                    futures = {ex.submit(_test_via_chain, e[0]): e for e in intl_for_chain}
+                    done = 0
+                    for future in concurrent.futures.as_completed(futures):
+                        done += 1
+                        res = future.result()
+                        if res:
+                            chain_results.append(res)
+                        if done % 10 == 0 or done == len(intl_for_chain):
+                            print(f"  Прогресс цепочки: {done}/{len(intl_for_chain)}")
+
+                _stop_chain_proxies()
+                print(f"  Через цепочку прошли: {len(chain_results)} зарубежных серверов")
+
+                # Зарубежные заменяем на проверенные через цепочку.
+                # Российские тоже возвращаем — чтобы FILTER_RUSSIAN их убрал ниже.
+                results = chain_results + ru_for_chain
+                results.sort(key=lambda x: x[1])
+            else:
+                print("  Не удалось запустить ни один российский сервер в цепочку.")
+                print("  Используем обычные результаты без цепочки.")
+        else:
+            print("[ЦЕПОЧКА] Российских серверов не найдено — пропускаем цепочку.")
+
+    # --- Применяем фильтры (ПОСЛЕ цепочки) ---
+    # Российские серверы убираются здесь — они уже сделали своё дело в цепочке.
+    any_filter = (FILTER_INSECURE or FILTER_LOCK or FILTER_RUSSIAN
+                  or FILTER_INVALID_PBK or FILTER_DEAD_SNI)
+    if any_filter:
+        before = len(results)
+
+        # Собираем уникальные SNI заранее и проверяем параллельно
+        if FILTER_DEAD_SNI:
+            sni_urls = list({entry[0] for entry in results})
+            print(f"  Проверка SNI-сайтов ({len(sni_urls)} уникальных)...")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=30) as ex:
+                list(ex.map(_check_sni, sni_urls))  # заполняет кеш _sni_cache
+
+        filtered = []
+        cnt_insecure = cnt_lock = cnt_ru = cnt_pbk = cnt_sni = 0
+        for entry in results:
+            url  = entry[0]
+            host, _ = _extract_host_port(url)
+            sec_level, _, _ = _get_security_level(url)
+            is_ru = _is_russian_server(host or '', url)
+
+            if FILTER_INSECURE and sec_level == 'insecure':
+                cnt_insecure += 1; continue
+            if FILTER_LOCK and sec_level == 'secure':
+                cnt_lock += 1; continue
+            if FILTER_RUSSIAN and is_ru:          # ← российские убираются ЗДЕСЬ
+                cnt_ru += 1; continue
+            if FILTER_INVALID_PBK and not _check_pbk(url):
+                cnt_pbk += 1; continue
+            if FILTER_DEAD_SNI and not _check_sni(url):
+                cnt_sni += 1; continue
+            filtered.append(entry)
+
+        results = filtered
+        print(f"  Фильтры убрали: {before - len(results)} серверов  (осталось {len(results)})")
+        if cnt_insecure: print(f"    ⚠️  небезопасных убрано : {cnt_insecure}")
+        if cnt_lock:     print(f"    🔒 TLS-only убрано     : {cnt_lock}")
+        if cnt_ru:       print(f"    🇷🇺 российских убрано  : {cnt_ru}  (использовались в цепочке)" if CHAIN_PROXY else f"    🇷🇺 российских убрано  : {cnt_ru}")
+        if cnt_pbk:      print(f"    🔑 невалидный pbk      : {cnt_pbk}")
+        if cnt_sni:      print(f"    🌐 мёртвый SNI-сайт    : {cnt_sni}")
+
+    # Делим по адресу сервера
     intl_all = []
     ru_all   = []
     for entry in results:
@@ -972,72 +1157,70 @@ def run():
         else:
             intl_all.append(entry)
 
-    # Дедупликация по /24 подсети
-    intl_all = _deduplicate_by_subnet(intl_all)
-    ru_all   = _deduplicate_by_subnet(ru_all)
-
-    # Reality-only топ с fallback
-    if REALITY_ONLY_TOP:
-        intl_top_pool = [e for e in intl_all if _is_reality(e[0])]
-        ru_top_pool   = [e for e in ru_all   if _is_reality(e[0])]
-        if len(intl_top_pool) < TOP_N_EACH:
-            intl_fallback = [e for e in intl_all if not _is_reality(e[0])]
-            intl_top_pool += intl_fallback
-        if len(ru_top_pool) < TOP_N_EACH:
-            ru_fallback = [e for e in ru_all if not _is_reality(e[0])]
-            ru_top_pool += ru_fallback
-    else:
-        intl_top_pool = intl_all
-        ru_top_pool   = ru_all
-
-    intl_results = intl_top_pool[:TOP_N_EACH]
-    ru_results   = ru_top_pool[:TOP_N_EACH]
-
-    reality_total = sum(1 for r in (intl_results + ru_results) if _is_reality(r[0]))
-    reality_pct   = int(reality_total / max(len(intl_results) + len(ru_results), 1) * 100)
+    intl_results = intl_all[:TOP_N_EACH]
+    ru_results   = ru_all[:TOP_N_EACH]
 
     print(f"\n{'─'*60}")
-    print(f"  Всего: {len(all_configs)} => TCP: {total_alive} => xray: {len(results)}")
+    print(f"  Всего: {len(all_configs)} -> TCP: {len(alive)} -> xray: {len(results)}")
     print(f"  Зарубежных: найдено {len(intl_all)}, в топе: {len(intl_results)}")
     print(f"  Российских: найдено {len(ru_all)}, в топе: {len(ru_results)}")
-    print(f"  Reality в финале: {reality_total} ({reality_pct}%)")
     print(f"  Время: {elapsed_total}с")
     print(f"{'─'*60}")
 
     print("\n  Топ-10 зарубежных:")
     for i, (url, score, avg, jitter, losses) in enumerate(intl_results[:10], 1):
+        _, sec_icon, _ = _get_security_level(url)
         name = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else url[8:48]
-        sec  = _get_security(url)
-        mark = " Reality" if sec == "reality" else f" [{sec}]"
-        print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}{mark}  {name}")
+        print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}  {sec_icon} {name}")
 
     if ru_results:
         print("\n  Топ-10 российских:")
         for i, (url, score, avg, jitter, losses) in enumerate(ru_results[:10], 1):
+            _, sec_icon, _ = _get_security_level(url)
             name = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else url[8:48]
-            sec  = _get_security(url)
-            mark = " Reality" if sec == "reality" else f" [{sec}]"
-            print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}{mark}  {name}")
+            print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}  {sec_icon} {name}")
 
-    final_urls = [r[0] for r in intl_results] + [r[0] for r in ru_results]
+    # Формируем URL-ы с иконкой безопасности в теге (#...)
+    tagged_urls = []
+    for r in intl_results + ru_results:
+        url = r[0]
+        _, sec_icon, _ = _get_security_level(url)
+        if '#' in url:
+            base, tag = url.rsplit('#', 1)
+            clean_tag = urllib.parse.unquote(tag)[:38]
+            tagged_urls.append(f"{base}#{sec_icon} {clean_tag}")
+        else:
+            host, port = _extract_host_port(url)
+            tagged_urls.append(f"{url}#{sec_icon} {host}:{port}")
 
     with open(FILE_NAME, "w", encoding="utf-8") as f:
-        f.write("\n".join(final_urls))
-    print(f"\nСохранено {len(final_urls)} серверов в {FILE_NAME}")
+        f.write("\n".join(tagged_urls))
+    print(f"\n Сохранено {len(tagged_urls)} серверов в {FILE_NAME}")
 
-    b64_content = base64.b64encode("\n".join(final_urls).encode("utf-8")).decode("utf-8")
+    # Генерируем Base64-подписку (для V2RayNG / Nekobox / Streisand)
+    b64_content = base64.b64encode("\n".join(tagged_urls).encode("utf-8")).decode("utf-8")
     with open(SUB_FILE, "w", encoding="utf-8") as f:
         f.write(b64_content)
-    print(f"Base64-подписка сохранена в {SUB_FILE}")
+    print(f" Base64-подписка сохранена в {SUB_FILE}")
 
+    # Генерируем HTML
     html = generate_html_viewer(intl_results, ru_results, elapsed_total)
     with open(VIEWER_FILE, "w", encoding="utf-8") as f:
         f.write(html)
-    print(f"HTML-viewer сохранён в {VIEWER_FILE}")
+    print(f" HTML-viewer сохранён в {VIEWER_FILE}")
 
+    # Обновляем Gist через GitHub REST API
     if GID:
         print("Обновляем Gist (три файла: vps.txt + sub.txt + index.html)...")
 
+        with open(FILE_NAME, "r", encoding="utf-8") as f:
+            vps_content = f.read()
+        with open(SUB_FILE, "r", encoding="utf-8") as f:
+            sub_content = f.read()
+        with open(VIEWER_FILE, "r", encoding="utf-8") as f:
+            html_content = f.read()
+
+        # Читаем токен из окружения
         token = os.environ.get('GH_TOKEN')
         if not token:
             try:
@@ -1051,9 +1234,9 @@ def run():
         if token:
             payload = json.dumps({
                 "files": {
-                    FILE_NAME:   {"content": "\n".join(final_urls)},
-                    SUB_FILE:    {"content": b64_content},
-                    VIEWER_FILE: {"content": html},
+                    FILE_NAME:   {"content": vps_content},
+                    SUB_FILE:    {"content": sub_content},
+                    VIEWER_FILE: {"content": html_content},
                 }
             }).encode("utf-8")
 
@@ -1071,15 +1254,15 @@ def run():
             try:
                 with url_req.urlopen(req) as resp:
                     if resp.status == 200:
-                        print("Gist обновлён.")
+                        print(" Gist обновлён.")
                     else:
-                        print(f"Gist ошибка: статус {resp.status}")
+                        print(f" Gist ошибка: статус {resp.status}")
             except Exception as e:
-                print(f"Gist ошибка: {e}")
+                print(f" Gist ошибка: {e}")
         else:
-            print("Не удалось получить токен GitHub (GH_TOKEN)!")
+            print(" Не удалось получить токен GitHub (GH_TOKEN)!")
     else:
-        print("MY_GIST_ID не задан — локальный запуск, файлы сохранены локально.")
+        print("  MY_GIST_ID не задан.")
 
 
 if __name__ == "__main__":
