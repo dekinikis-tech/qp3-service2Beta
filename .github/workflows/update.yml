@@ -1,1 +1,61 @@
+name: VPN Auto Update
 
+on:
+  # schedule:
+  #   - cron: '0 * * * *'  # Эта часть отвечала за запуск каждый час
+  workflow_dispatch:      # Это оставляет возможность запускать скрипт вручную
+
+concurrency:
+  group: vpn-update
+  cancel-in-progress: true
+
+
+jobs:
+  update_gist:
+    runs-on: ubuntu-latest
+    # Жёсткий лимит: если за 25 минут не уложились — убиваем
+    timeout-minutes: 300
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Xray
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          API_RESPONSE=$(curl -s \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/XTLS/Xray-core/releases/latest")
+
+          # Проверяем, что ответ валидный
+          if echo "$API_RESPONSE" | jq -e '.assets' > /dev/null 2>&1; then
+            LATEST_URL=$(echo "$API_RESPONSE" \
+              | jq -r '.assets[] | select(.name == "Xray-linux-64.zip") | .browser_download_url')
+          else
+            echo "GitHub API error:"
+            echo "$API_RESPONSE" | jq '.' || echo "$API_RESPONSE"
+            exit 1
+          fi
+
+          echo "Downloading Xray from: $LATEST_URL"
+          wget -q -O xray.zip "$LATEST_URL"
+          unzip -o xray.zip xray
+          sudo mv xray /usr/local/bin/xray
+          sudo chmod +x /usr/local/bin/xray
+          xray version
+
+      - name: Install Python dependencies
+        run: pip install "requests[socks]"
+
+      - name: Run checker
+        env:
+          GH_TOKEN: ${{ secrets.GIST_TOKEN }}
+          MY_GIST_ID: ${{ secrets.MY_GIST_ID }}
+        run: python main.py
