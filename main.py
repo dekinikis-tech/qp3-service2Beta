@@ -67,13 +67,14 @@ SOURCES = [
     # itsyebekhe PSG: агрегатор с тестированием, reality и xhttp отдельно
     "https://raw.githubusercontent.com/itsyebekhe/PSG/main/subscriptions/xray/base64/reality",
     "https://raw.githubusercontent.com/itsyebekhe/PSG/main/subscriptions/xray/base64/xhttp",
-    # MrMohebi: граббер из Telegram, отдельный файл reality
-    "https://raw.githubusercontent.com/MrMohebi/xray-proxy-grabber-telegram/master/collected-proxies/row-url/realities.txt",
-    "https://raw.githubusercontent.com/MrMohebi/xray-proxy-grabber-telegram/master/collected-proxies/row-url/all.txt",
-    # coldwater V2Hub1: разбито по протоколам, регулярно обновляется
-    "https://raw.githubusercontent.com/coldwater-10/V2Hub1/main/split/vless.txt",
-    "https://raw.githubusercontent.com/coldwater-10/V2Hub1/main/split/trojan.txt",
-    "https://raw.githubusercontent.com/coldwater-10/V2Hub1/main/split/shadowsocks.txt",
+    # MrMohebi: граббер из Telegram (actives — только живые на момент обновления)
+    "https://raw.githubusercontent.com/MrMohebi/xray-proxy-grabber-telegram/master/collected-proxies/row-url/actives.txt",
+    # soroushmirzaei: splitted/mixed — единственный живой путь
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/splitted/mixed",
+    # Surfboardv2ray: TGParse mixed, активный парсер Telegram
+    "https://raw.githubusercontent.com/Surfboardv2ray/TGParse/main/splitted/mixed",
+    # mheidari98: proxy aggregator
+    "https://raw.githubusercontent.com/mheidari98/.proxy/main/all",
     # AvenCores goida: русскоязычный, обновляется каждые 9 минут
     # файлы в githubmirror/N.txt (1-26), рекомендованные: 1,6,22,23,24,25,26
     "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/1.txt",
