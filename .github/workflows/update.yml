@@ -1,20 +1,19 @@
 name: VPN Auto Update
 
 on:
-  # schedule:
-  #   - cron: '0 * * * *'  # Эта часть отвечала за запуск каждый час
-  workflow_dispatch:      # Это оставляет возможность запускать скрипт вручную
+  schedule:
+    - cron: '0 */3 * * *'  # Запуск каждые 3 часа (в 00:00, 03:00, 06:00 и т.д. по UTC)
+  workflow_dispatch:      # Возможность запускать вручную
 
 concurrency:
   group: vpn-update
   cancel-in-progress: true
 
-
 jobs:
   update_gist:
     runs-on: ubuntu-latest
-    # Жёсткий лимит: если за 25 минут не уложились — убиваем
-    timeout-minutes: 300
+    # Лимит времени выполнения (уменьшен до 150 минут, чтобы не перекрывать следующий запуск)
+    timeout-minutes: 150
 
     steps:
       - name: Checkout code
@@ -32,11 +31,12 @@ jobs:
           API_RESPONSE=$(curl -s \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/XTLS/Xray-core/releases/latest")
+            "https://github.com")
 
           # Проверяем, что ответ валидный
           if echo "$API_RESPONSE" | jq -e '.assets' > /dev/null 2>&1; then
             LATEST_URL=$(echo "$API_RESPONSE" \
+
               | jq -r '.assets[] | select(.name == "Xray-linux-64.zip") | .browser_download_url')
           else
             echo "GitHub API error:"
