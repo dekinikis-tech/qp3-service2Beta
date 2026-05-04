@@ -2,7 +2,7 @@ name: VPN Auto Update
 
 on:
   schedule:
-    - cron: '0 */3 * * *'  # Запуск каждые 3 часа
+    - cron: '0 */3 * * *'  # Каждые 3 часа
   workflow_dispatch:      # Ручной запуск
 
 concurrency:
@@ -12,7 +12,7 @@ concurrency:
 jobs:
   update_gist:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 30
 
     steps:
       - name: Checkout code
@@ -24,21 +24,18 @@ jobs:
           python-version: '3.11'
 
       - name: Install Xray
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          API_RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://github.com")
+          # Получаем прямую ссылку на последнюю версию без сложных фильтров
+          LATEST_URL="https://github.com"
           
-          if echo "$API_RESPONSE" | jq -e '.assets' > /dev/null 2>&1; then
-            LATEST_URL=$(echo "$API_RESPONSE" | jq -r '.assets[] | select(.name == "Xray-linux-64.zip") | .browser_download_url')
-          else
-            echo "GitHub API error:"
-            echo "$API_RESPONSE" | jq '.' || echo "$API_RESPONSE"
-            exit 1
-          fi
-
           echo "Downloading Xray from: $LATEST_URL"
           wget -q -O xray.zip "$LATEST_URL"
+          
+          if [ ! -f xray.zip ]; then
+            echo "Failed to download Xray"
+            exit 1
+          fi
+          
           unzip -o xray.zip xray
           sudo mv xray /usr/local/bin/xray
           sudo chmod +x /usr/local/bin/xray
