@@ -58,6 +58,7 @@ TEST_URLS = [
 ]
 
 SOURCES = [
+    # ── TIER 1: Reality/XTLS — максимальное качество ──────────────────────
     # 10ium: Reality-only файл + раздельные протоколы (обновляется часто)
     "https://raw.githubusercontent.com/10ium/V2Hub3/refs/heads/main/Split/Normal/reality",
     "https://raw.githubusercontent.com/10ium/ScrapeAndCategorize/refs/heads/main/output_configs/Vless.txt",
@@ -66,36 +67,40 @@ SOURCES = [
     # itsyebekhe PSG: агрегатор с тестированием, reality и xhttp отдельно
     "https://raw.githubusercontent.com/itsyebekhe/PSG/main/subscriptions/xray/base64/reality",
     "https://raw.githubusercontent.com/itsyebekhe/PSG/main/subscriptions/xray/base64/xhttp",
-    # soroushmirzaei: крупнейший Telegram-коллектор, отдельный файл reality
-    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/vless",
-    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/trojan",
-    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/splitted/realistic",
+    # soroushmirzaei: крупнейший Telegram-коллектор
+    # актуальные пути: protocols/shadowsocks, protocols/hysteria, protocols/reality (не vless/trojan — 404)
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/shadowsocks",
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/hysteria",
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/channels/protocols/vless",
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/channels/protocols/trojan",
     # AvenCores goida: русскоязычный, обновляется каждые 9 минут
-    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/main/protocols/vless.txt",
-    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/main/protocols/trojan.txt",
-    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/main/protocols/reality.txt",
+    # файлы в githubmirror/N.txt (1-26), рекомендованные: 1,6,22,23,24,25,26
+    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/1.txt",
+    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/6.txt",
+    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/22.txt",
+    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/23.txt",
+    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/24.txt",
+    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/25.txt",
+    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/26.txt",
     # ── TIER 2: Качественные агрегаторы с фильтрацией ────────────────────
-    # barry-far: разбито по протоколам (без Sub1..10 которые дублируют)
+    # barry-far: разбито по протоколам
     "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/vless.txt",
     "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/trojan.txt",
     "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/ss.txt",
-    # Epodonios: обновляется каждые 5 минут, разбито по протоколам
+    # Epodonios: обновляется каждые 5 минут
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/vless.txt",
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/trojan.txt",
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/ss.txt",
-    # MatinGhanbari: filtered подписки (уже прошли базовую фильтрацию)
+    # MatinGhanbari: filtered (уже прошли базовую фильтрацию)
     "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/vless.txt",
     "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/trojan.txt",
     "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/hysteria2.txt",
-    # yebekhe: коллектор из Telegram-каналов
-    "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/base64/vless",
-    "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/base64/trojan",
-    # F0rc3Run: небольшой но регулярно обновляемый
+    # F0rc3Run: регулярно обновляемый
     "https://raw.githubusercontent.com/F0rc3Run/F0rc3Run/refs/heads/main/splitted-by-protocol/vless.txt",
     "https://raw.githubusercontent.com/F0rc3Run/F0rc3Run/refs/heads/main/splitted-by-protocol/trojan.txt",
     # ALIILAPRO: стабильный источник
     "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/sub.txt",
-    # NiREvil: Cloudflare + reality конфиги
+    # NiREvil: reality + cloudflare конфиги
     "https://raw.githubusercontent.com/NiREvil/vless/main/sub/SSl.txt",
     # Pawdroid: небольшой но чистый
     "https://raw.githubusercontent.com/Pawdroid/Free-servers/main/sub",
