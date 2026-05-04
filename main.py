@@ -67,13 +67,13 @@ SOURCES = [
     # itsyebekhe PSG: агрегатор с тестированием, reality и xhttp отдельно
     "https://raw.githubusercontent.com/itsyebekhe/PSG/main/subscriptions/xray/base64/reality",
     "https://raw.githubusercontent.com/itsyebekhe/PSG/main/subscriptions/xray/base64/xhttp",
-    # soroushmirzaei: крупнейший Telegram-коллектор
-    # subscribe/layers/* — единственные живые пути (protocols/* и channels/* дают 404)
-    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/subscribe/layers/ipv4",
-    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/subscribe/layers/ipv6",
-    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/subscribe/protocols/reality",
-    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/subscribe/protocols/vless",
-    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/subscribe/protocols/trojan",
+    # MrMohebi: граббер из Telegram, отдельный файл reality
+    "https://raw.githubusercontent.com/MrMohebi/xray-proxy-grabber-telegram/master/collected-proxies/row-url/realities.txt",
+    "https://raw.githubusercontent.com/MrMohebi/xray-proxy-grabber-telegram/master/collected-proxies/row-url/all.txt",
+    # coldwater V2Hub1: разбито по протоколам, регулярно обновляется
+    "https://raw.githubusercontent.com/coldwater-10/V2Hub1/main/split/vless.txt",
+    "https://raw.githubusercontent.com/coldwater-10/V2Hub1/main/split/trojan.txt",
+    "https://raw.githubusercontent.com/coldwater-10/V2Hub1/main/split/shadowsocks.txt",
     # AvenCores goida: русскоязычный, обновляется каждые 9 минут
     # файлы в githubmirror/N.txt (1-26), рекомендованные: 1,6,22,23,24,25,26
     "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/1.txt",
@@ -101,12 +101,10 @@ SOURCES = [
     "https://raw.githubusercontent.com/F0rc3Run/F0rc3Run/refs/heads/main/splitted-by-protocol/trojan.txt",
     # ALIILAPRO: стабильный источник
     "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/sub.txt",
-    # 4n0nymou3: ss-config-updater, реальные конфиги из Telegram (упоминается в NiREvil README)
+    # 4n0nymou3: конфиги из Telegram каналов
     "https://raw.githubusercontent.com/4n0nymou3/ss-config-updater/refs/heads/main/configs.txt",
-    # Epodonios bulk по странам — US, UK, DE (высокое качество, реальные серверы)
-    "https://raw.githubusercontent.com/Epodonios/bulk-xray-v2ray-vless-vmess-...-configs/refs/heads/main/sub/United%20States/config.txt",
-    "https://raw.githubusercontent.com/Epodonios/bulk-xray-v2ray-vless-vmess-...-configs/refs/heads/main/sub/United%20Kingdom/config.txt",
-    "https://raw.githubusercontent.com/Epodonios/bulk-xray-v2ray-vless-vmess-...-configs/refs/heads/main/sub/Germany/config.txt",
+    # mahdibland: крупный агрегатор, merged подписка
+    "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/sub_merge_base64.txt",
     # Pawdroid: небольшой но чистый
     "https://raw.githubusercontent.com/Pawdroid/Free-servers/main/sub",
 ]
