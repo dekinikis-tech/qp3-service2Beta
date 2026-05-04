@@ -58,29 +58,47 @@ TEST_URLS = [
 ]
 
 SOURCES = [
-        "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/vless.txt",
+    # 10ium: Reality-only файл + раздельные протоколы (обновляется часто)
+    "https://raw.githubusercontent.com/10ium/V2Hub3/refs/heads/main/Split/Normal/reality",
+    "https://raw.githubusercontent.com/10ium/ScrapeAndCategorize/refs/heads/main/output_configs/Vless.txt",
+    "https://raw.githubusercontent.com/10ium/ScrapeAndCategorize/refs/heads/main/output_configs/Trojan.txt",
+    "https://raw.githubusercontent.com/10ium/ScrapeAndCategorize/refs/heads/main/output_configs/ShadowSocks.txt",
+    # itsyebekhe PSG: агрегатор с тестированием, reality и xhttp отдельно
+    "https://raw.githubusercontent.com/itsyebekhe/PSG/main/subscriptions/xray/base64/reality",
+    "https://raw.githubusercontent.com/itsyebekhe/PSG/main/subscriptions/xray/base64/xhttp",
+    # soroushmirzaei: крупнейший Telegram-коллектор, отдельный файл reality
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/vless",
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/trojan",
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/splitted/realistic",
+    # AvenCores goida: русскоязычный, обновляется каждые 9 минут
+    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/main/protocols/vless.txt",
+    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/main/protocols/trojan.txt",
+    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/main/protocols/reality.txt",
+    # ── TIER 2: Качественные агрегаторы с фильтрацией ────────────────────
+    # barry-far: разбито по протоколам (без Sub1..10 которые дублируют)
+    "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/vless.txt",
+    "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/trojan.txt",
+    "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/ss.txt",
+    # Epodonios: обновляется каждые 5 минут, разбито по протоколам
+    "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/vless.txt",
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/trojan.txt",
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/ss.txt",
+    # MatinGhanbari: filtered подписки (уже прошли базовую фильтрацию)
     "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/vless.txt",
     "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/trojan.txt",
-    "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/ss.txt",
     "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/hysteria2.txt",
+    # yebekhe: коллектор из Telegram-каналов
+    "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/base64/vless",
+    "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/base64/trojan",
+    # F0rc3Run: небольшой но регулярно обновляемый
     "https://raw.githubusercontent.com/F0rc3Run/F0rc3Run/refs/heads/main/splitted-by-protocol/vless.txt",
     "https://raw.githubusercontent.com/F0rc3Run/F0rc3Run/refs/heads/main/splitted-by-protocol/trojan.txt",
-    "https://raw.githubusercontent.com/F0rc3Run/F0rc3Run/refs/heads/main/splitted-by-protocol/shadowsocks.txt",
-    "https://raw.githubusercontent.com/sevcator/5ubscrpt10n/main/protocols/vl.txt",
-    "https://raw.githubusercontent.com/sevcator/5ubscrpt10n/main/protocols/tr.txt",
-    "https://raw.githubusercontent.com/sevcator/5ubscrpt10n/main/protocols/ss.txt",
-    "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/refs/heads/main/all_extracted_configs.txt",
-    "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub1.txt",
-    "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub2.txt",
-    "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub3.txt",
-    # Дополнительные источники Reality-конфигов
-    "https://raw.githubusercontent.com/coldwater-10/V2Hub2/main/split/vless.txt",
-    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/reality",
-    "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/reality",
+    # ALIILAPRO: стабильный источник
     "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/sub.txt",
-    "https://raw.githubusercontent.com/mfuu/v2ray/master/v2ray",
+    # NiREvil: Cloudflare + reality конфиги
+    "https://raw.githubusercontent.com/NiREvil/vless/main/sub/SSl.txt",
+    # Pawdroid: небольшой но чистый
+    "https://raw.githubusercontent.com/Pawdroid/Free-servers/main/sub",
 ]
 BLACK_LIST = [
     'meshky', '4mohsen', 'white', '708087',
