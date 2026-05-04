@@ -2,8 +2,8 @@ name: VPN Auto Update
 
 on:
   schedule:
-    - cron: '0 */3 * * *'  # Запуск каждые 3 часа (в 00:00, 03:00, 06:00 и т.д. по UTC)
-  workflow_dispatch:      # Возможность запускать вручную
+    - cron: '0 */3 * * *'  # Запуск каждые 3 часа
+  workflow_dispatch:      # Ручной запуск
 
 concurrency:
   group: vpn-update
@@ -12,7 +12,6 @@ concurrency:
 jobs:
   update_gist:
     runs-on: ubuntu-latest
-    # Лимит времени выполнения (уменьшен до 150 минут, чтобы не перекрывать следующий запуск)
     timeout-minutes: 150
 
     steps:
@@ -28,16 +27,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          API_RESPONSE=$(curl -s \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://github.com")
-
-          # Проверяем, что ответ валидный
+          API_RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://github.com")
+          
           if echo "$API_RESPONSE" | jq -e '.assets' > /dev/null 2>&1; then
-            LATEST_URL=$(echo "$API_RESPONSE" \
-
-              | jq -r '.assets[] | select(.name == "Xray-linux-64.zip") | .browser_download_url')
+            LATEST_URL=$(echo "$API_RESPONSE" | jq -r '.assets[] | select(.name == "Xray-linux-64.zip") | .browser_download_url')
           else
             echo "GitHub API error:"
             echo "$API_RESPONSE" | jq '.' || echo "$API_RESPONSE"
