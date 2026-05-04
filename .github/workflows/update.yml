@@ -2,9 +2,10 @@ name: VPN Auto Update
 
 on:
   schedule:
-    - cron: '0 */3 * * *'  # Каждые 3 часа
-  workflow_dispatch:      # Ручной запуск
+    - cron: '0 */3 * * *'
+  workflow_dispatch:
 
+# Новый запуск автоматически отменяет предыдущий
 concurrency:
   group: vpn-update
   cancel-in-progress: true
@@ -12,7 +13,7 @@ concurrency:
 jobs:
   update_gist:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 150
 
     steps:
       - name: Checkout code
@@ -24,28 +25,42 @@ jobs:
           python-version: '3.11'
 
       - name: Install Xray
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Получаем прямую ссылку на последнюю версию без сложных фильтров
-          LATEST_URL="https://github.com"
-          
-          echo "Downloading Xray from: $LATEST_URL"
-          wget -q -O xray.zip "$LATEST_URL"
-          
-          if [ ! -f xray.zip ]; then
-            echo "Failed to download Xray"
+          API_RESPONSE=$(curl -s \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/XTLS/Xray-core/releases/latest")
+
+          if echo "$API_RESPONSE" | jq -e '.assets' > /dev/null 2>&1; then
+            LATEST_URL=$(echo "$API_RESPONSE" \
+              | jq -r '.assets[] | select(.name == "Xray-linux-64.zip") | .browser_download_url')
+          else
+            echo "GitHub API error:"
+            echo "$API_RESPONSE" | jq '.' || echo "$API_RESPONSE"
             exit 1
           fi
-          
+
+          echo "Downloading Xray from: $LATEST_URL"
+          wget -q -O xray.zip "$LATEST_URL"
           unzip -o xray.zip xray
           sudo mv xray /usr/local/bin/xray
           sudo chmod +x /usr/local/bin/xray
           xray version
 
       - name: Install Python dependencies
-        run: pip install "requests[socks]"
+        run: pip install "requests[socks]" geoip2
+
+      - name: Download GeoLite2 database
+        run: |
+          wget -q -O GeoLite2-Country.mmdb \
+            "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-Country.mmdb"
+          echo "GeoLite2-Country.mmdb скачан: $(du -sh GeoLite2-Country.mmdb)"
 
       - name: Run checker
         env:
           GH_TOKEN: ${{ secrets.GIST_TOKEN }}
           MY_GIST_ID: ${{ secrets.MY_GIST_ID }}
+          GEOIP_DB: GeoLite2-Country.mmdb
         run: python main.py
