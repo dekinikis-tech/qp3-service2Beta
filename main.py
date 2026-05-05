@@ -43,12 +43,12 @@ TCP_TIMEOUT    = 1.5
 # Этап 2 — глубокая проверка через xray
 # Динамические таймауты: если MY_SLOW_NET=1 — увеличиваем пороги для медленных соединений
 _slow = os.environ.get('MY_SLOW_NET') == '1'
-XRAY_WORKERS       = 15
-PING_ROUNDS        = 3
+XRAY_WORKERS       = 40
+PING_ROUNDS        = 2
 MAX_PING_MS        = 6000  if _slow else 4000
 MAX_LOSS_RATE      = 0.67  if _slow else 0.5
-REQUEST_TIMEOUT    = 12.0  if _slow else 7.0
-XRAY_START_TIMEOUT = 5.0   if _slow else 3.5
+REQUEST_TIMEOUT    = 12.0  if _slow else 5.0
+XRAY_START_TIMEOUT = 5.0   if _slow else 2.0
 
 TEST_URLS = [
     "http://www.instagram.com/",
@@ -67,10 +67,7 @@ SOURCES = [
     # itsyebekhe PSG: агрегатор с тестированием, reality и xhttp отдельно
     "https://raw.githubusercontent.com/itsyebekhe/PSG/main/subscriptions/xray/base64/reality",
     "https://raw.githubusercontent.com/itsyebekhe/PSG/main/subscriptions/xray/base64/xhttp",
-    # MrMohebi: граббер из Telegram (actives — только живые на момент обновления)
-    "https://raw.githubusercontent.com/MrMohebi/xray-proxy-grabber-telegram/master/collected-proxies/row-url/actives.txt",
-    # soroushmirzaei: splitted/mixed — единственный живой путь
-    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/splitted/mixed",
+    # Surfboardv2ray: TGParse — парсер Telegram (уже живой выше)
     # Surfboardv2ray: TGParse mixed, активный парсер Telegram
     "https://raw.githubusercontent.com/Surfboardv2ray/TGParse/main/splitted/mixed",
     # mheidari98: proxy aggregator
@@ -102,8 +99,7 @@ SOURCES = [
     "https://raw.githubusercontent.com/F0rc3Run/F0rc3Run/refs/heads/main/splitted-by-protocol/trojan.txt",
     # ALIILAPRO: стабильный источник
     "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/sub.txt",
-    # 4n0nymou3: конфиги из Telegram каналов
-    "https://raw.githubusercontent.com/4n0nymou3/ss-config-updater/refs/heads/main/configs.txt",
+
     # mahdibland: крупный агрегатор, merged подписка
     "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/sub_merge_base64.txt",
     # Pawdroid: небольшой но чистый
@@ -189,7 +185,7 @@ PROTO_REGEX = re.compile(
 )
 
 port_queue: queue.Queue = queue.Queue()
-for _p in range(25000, 25000 + XRAY_WORKERS):
+for _p in range(25000, 25000 + max(XRAY_WORKERS, 50)):
     port_queue.put(_p)
 
 
@@ -1057,6 +1053,24 @@ def run():
     if not alive:
         print("Нет живых серверов после TCP-проверки.")
         return
+
+    # --- Предфильтрация: убираем серверы без TLS/Reality до xray ---
+    # Серверы с security=none почти всегда не пройдут фильтры, незачем тратить на них xray
+    pre_filtered = []
+    skipped_insecure = 0
+    for url in alive:
+        sec = _get_security(url)
+        proto = url.split('://')[0] if '://' in url else ''
+        # trojan по умолчанию TLS — пропускаем всегда
+        # hysteria2 — свой протокол, пропускаем всегда
+        # vless/ss без TLS — пропускаем если FILTER_INSECURE включён
+        if FILTER_INSECURE and sec == 'none' and proto in ('vless', 'ss'):
+            skipped_insecure += 1
+            continue
+        pre_filtered.append(url)
+    if skipped_insecure:
+        print(f"      Предфильтр убрал: {skipped_insecure} небезопасных  (осталось {len(pre_filtered)})")
+    alive = pre_filtered
 
     # --- [3/4] Xray ---
     print(f"\n[3/4] Глубокая xray-проверка {len(alive)} серверов ({XRAY_WORKERS} воркеров)...")
