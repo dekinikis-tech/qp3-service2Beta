@@ -19,7 +19,7 @@ off = False  # псевдоним для удобства
 
 FILTER_INSECURE    = on    # on = скрыть ⚠️  небезопасные (нет TLS / allowInsecure=1)
 FILTER_LOCK        = off   # on = скрыть 🔒  обычный TLS  (оставить только Reality 🔑)
-FILTER_RUSSIAN     = on    # on = скрыть 🇷🇺  российские  (IP + домен + тег + SNI)
+FILTER_RUSSIAN     = off    # on = скрыть 🇷🇺  российские  (IP + домен + тег + SNI)
 FILTER_INVALID_PBK = off   # on = скрыть серверы с невалидным pbk ключом Reality
 FILTER_DEAD_SNI    = off    # on = скрыть серверы у которых SNI-сайт не отвечает
 
